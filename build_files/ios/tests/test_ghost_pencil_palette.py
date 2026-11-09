@@ -377,7 +377,9 @@ class PencilInteractionSourceTests(unittest.TestCase):
         drag = drag[: drag.index("\n}\n")]
         self.assertIn("GHOST_IOSFinger_mayClick(touch_settings, interaction_context)", drag)
         self.assertIn("PAN_GESTURE_TWO_FINGERS", drag)
-        self.assertIn("UIPencilInteraction.prefersPencilOnlyDrawing", self.palette)
+        # The default follows the system setting until the user picks; settings live in one file.
+        sync = (GHOST_INTERN / "GHOST_IOSSettingsSync.mm").read_text()
+        self.assertIn("UIPencilInteraction.prefersPencilOnlyDrawing", sync)
 
     def test_previous_tool_goes_through_the_window_manager(self) -> None:
         previous = self.window[self.window.index("case GHOST_IOSPencilAction::PreviousTool:") :]

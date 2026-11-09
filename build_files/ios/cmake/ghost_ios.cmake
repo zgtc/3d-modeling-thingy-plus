@@ -12,11 +12,19 @@ list(APPEND SRC
   intern/GHOST_IOSInputTuning.hh
   intern/GHOST_IOSModifierBelt.hh
   intern/GHOST_IOSModifierBelt.mm
+  intern/GHOST_IOSMenuBar.hh
+  intern/GHOST_IOSMenuBar.mm
+  intern/GHOST_IOSMenuItems.hh
   intern/GHOST_IOSModifierLatch.hh
   intern/GHOST_IOSPencilContact.hh
   intern/GHOST_IOSPencilPalette.hh
   intern/GHOST_IOSPencilPalette.mm
   intern/GHOST_IOSPencilSettings.hh
+  intern/GHOST_IOSResizeHandles.hh
+  intern/GHOST_IOSResizeHandles.mm
+  intern/GHOST_IOSSettingsFile.hh
+  intern/GHOST_IOSSettingsSync.hh
+  intern/GHOST_IOSSettingsSync.mm
   intern/GHOST_IOSSettingsLocation.hh
   intern/GHOST_IOSSettingsLocation.mm
   intern/GHOST_IOSStyle.hh

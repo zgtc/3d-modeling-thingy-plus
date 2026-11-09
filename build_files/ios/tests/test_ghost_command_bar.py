@@ -318,7 +318,7 @@ class WindowManagerChannelTests(unittest.TestCase):
                         update.index("GHOST_IOS_SetInteractionContext"))
         run = shim[shim.index("static void wm_ios_run_command(") :]
         run = run[: run.index("\n}\n")]
-        self.assertIn("WM_operatortype_find(line, true)", run)
+        self.assertIn("WM_operatortype_find(idname, true)", run)
         self.assertIn("WM_operator_name_call_ptr(C, ot, wm::OpCallContext::InvokeDefault", run)
         self.assertIn("WM_operator_properties_free(&ptr);", run)
         self.assertIn("CTX_wm_area_set(C, prev_area);", run)

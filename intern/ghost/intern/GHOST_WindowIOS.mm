@@ -12,8 +12,11 @@
 #include "GHOST_IOSFileAccess.hh"
 #include "GHOST_IOSInputTuning.hh"
 #include "GHOST_IOSInteraction.hh"
+#include "GHOST_IOSMenuBar.hh"
 #include "GHOST_IOSModifierBelt.hh"
 #include "GHOST_IOSPencilPalette.hh"
+#include "GHOST_IOSResizeHandles.hh"
+#include "GHOST_IOSSettingsSync.hh"
 #include "GHOST_IOSModifierLatch.hh"
 #include "GHOST_IOSPencilContact.hh"
 #include "GHOST_IOSStyle.hh"
@@ -341,7 +344,8 @@ typedef struct UserInputEvent {
                                       UIPencilInteractionDelegate,
                                       UITextFieldDelegate,
                                       GHOSTIOSModifierBeltDelegate,
-                                      GHOSTIOSPencilPaletteDelegate>
+                                      GHOSTIOSPencilPaletteDelegate,
+                                      GHOSTIOSResizeHandlesDelegate>
 {
   GHOST_SystemIOS *system;
   GHOST_WindowIOS *window;
@@ -398,9 +402,17 @@ typedef struct UserInputEvent {
   NSObject *modifier_belt;
   GHOST_IOSModifierLatch *modifier_latch;
 
+  /* Grab handles on sidebar and toolbar edges. */
+  NSObject *resize_handles;
+  bool resize_handle_dragging;
+
   /* Apple Pencil palette and the touch settings behind it. */
   NSObject *pencil_palette;
   const GHOST_IOSPaletteSlot *pencil_palette_slots;
+  /* Palette and shortcut keys with the user's replacements applied. */
+  GHOST_IOSCustomPalette custom_palette;
+  GHOST_IOSCustomBar custom_bar;
+  id settings_observer;
   GHOST_IOSTouchSettings touch_settings;
   /** Where the Pencil was last seen, in view points, for palettes opened without a hover pose. */
   CGPoint last_pencil_view_point;
@@ -648,6 +660,9 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   file_access_controls = nil;
   modifier_belt = nil;
   modifier_latch = new GHOST_IOSModifierLatch();
+  resize_handles = nil;
+  resize_handle_dragging = false;
+  settings_observer = nil;
   pencil_palette = nil;
   pencil_palette_slots = nullptr;
   touch_settings = GHOST_IOSTouchSettings_load();
@@ -684,6 +699,13 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   GHOST_IOSPencilPalette_destroy(pencil_palette);
   pencil_palette = nil;
   pencil_palette_slots = nullptr;
+  GHOST_IOSResizeHandles_destroy(resize_handles);
+  resize_handles = nil;
+  if (settings_observer != nil) {
+    [NSNotificationCenter.defaultCenter removeObserver:settings_observer];
+    [settings_observer release];
+    settings_observer = nil;
+  }
   [queued_commands release];
   queued_commands = nil;
 
@@ -835,31 +857,147 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   }
   modifier_belt = GHOST_IOSModifierBelt_create(window->getView(), self);
   pencil_palette = GHOST_IOSPencilPalette_create(window->getView(), self);
+  resize_handles = GHOST_IOSResizeHandles_create(window->getView(), self);
+  GHOSTUIWindow *ui_window = self;
+  settings_observer = [[NSNotificationCenter.defaultCenter
+      addObserverForName:GHOST_IOSTouchSettingsDidChangeNotification
+                  object:nil
+                   queue:NSOperationQueue.mainQueue
+              usingBlock:^(NSNotification *) {
+                [ui_window reloadSharedSettings];
+              }] retain];
   [self updateSettingsMenu];
   [self updateCommandBarForContext];
+  if (touch_settings.touch_spacing) {
+    /* The window manager applies it on its first loop pass. */
+    [self applyTouchSpacing];
+  }
 }
 
 - (void)updateSettingsMenu
 {
   GHOSTUIWindow *ui_window = self;
-  UIMenu *menu = GHOST_IOSTouchSettings_menu(touch_settings,
-                                             ^(const GHOST_IOSTouchSettings &settings) {
-                                               [ui_window applyTouchSettings:settings];
-                                             });
+  UIMenu *menu = GHOST_IOSTouchSettings_menu(
+      touch_settings,
+      ^(const GHOST_IOSTouchSettings &settings) {
+        [ui_window applyTouchSettings:settings];
+      },
+      ^(GHOST_IOSSettingsMenuCommand command) {
+        [ui_window runSettingsCommand:command];
+      });
   GHOST_IOSModifierBelt_setSettingsMenu(modifier_belt, menu);
+}
+
+- (void)runSettingsCommand:(GHOST_IOSSettingsMenuCommand)command
+{
+  switch (command) {
+    case GHOST_IOSSettingsMenuCommand::ChooseSyncFolder:
+      GHOST_IOSSettings_chooseSyncFolder(self.rootViewController);
+      break;
+    case GHOST_IOSSettingsMenuCommand::StopSync:
+      GHOST_IOSSettings_stopSync();
+      [self updateSettingsMenu];
+      break;
+    case GHOST_IOSSettingsMenuCommand::ResetCustomizations: {
+      GHOST_IOSSettingsFile &file = GHOST_IOSSettings_shared();
+      file.custom_num = 0;
+      GHOST_IOSSettings_save();
+      [self updateCommandBarForContext];
+      break;
+    }
+  }
+}
+
+/** Settings changed outside this window: another window, or a newer synced copy. */
+- (void)reloadSharedSettings
+{
+  const bool spacing_changed = GHOST_IOSSettings_shared().touch.touch_spacing !=
+                               touch_settings.touch_spacing;
+  touch_settings = GHOST_IOSSettings_shared().touch;
+  [self updateSettingsMenu];
+  [self updateCommandBarForContext];
+  if (spacing_changed) {
+    [self applyTouchSpacing];
+  }
+}
+
+/** Ask what a slot or key should do instead. \a name is its #GHOST_IOSCustom_name. */
+- (void)editCustomization:(const char *)name title:(const char *)title
+{
+  UIViewController *presenter = self.rootViewController;
+  if (presenter == nil || presenter.presentedViewController != nil) {
+    return;
+  }
+  NSString *custom_name = [NSString stringWithUTF8String:name];
+  const char *current = GHOST_IOSSettings_shared().customAction(name);
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:[NSString stringWithFormat:@"Replace “%@”",
+                                                          [NSString stringWithUTF8String:title]]
+                       message:@"Type a key such as Shift+D, an operator such as "
+                               @"mesh.subdivide, or a menu such as VIEW3D_MT_add."
+                preferredStyle:UIAlertControllerStyleAlert];
+  [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+    field.text = current != nullptr ? [NSString stringWithUTF8String:current] : @"";
+    field.placeholder = @"Shift+D or mesh.subdivide";
+    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    field.autocorrectionType = UITextAutocorrectionTypeNo;
+    field.accessibilityIdentifier = @"blender_customize_action";
+  }];
+  GHOSTUIWindow *ui_window = self;
+  [alert addAction:[UIAlertAction actionWithTitle:@"Save"
+                                            style:UIAlertActionStyleDefault
+                                          handler:^(UIAlertAction *) {
+                                            NSString *text = alert.textFields.firstObject.text;
+                                            [ui_window saveCustomization:custom_name text:text];
+                                          }]];
+  if (current != nullptr) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Reset to Default"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *) {
+                                              [ui_window saveCustomization:custom_name text:@""];
+                                            }]];
+  }
+  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  [presenter presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)saveCustomization:(NSString *)name text:(NSString *)text
+{
+  const char *action = text.UTF8String != nullptr ? text.UTF8String : "";
+  GHOST_IOSCustomAction parsed;
+  if (action[0] != '\0' && !GHOST_IOSCustomAction_parse(action, &parsed)) {
+    UIAlertController *error = [UIAlertController
+        alertControllerWithTitle:@"Not Recognized"
+                         message:[NSString stringWithFormat:@"“%@” is not a key, operator or menu.",
+                                                            text]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [error addAction:[UIAlertAction actionWithTitle:@"OK"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [self.rootViewController presentViewController:error animated:YES completion:nil];
+    return;
+  }
+  GHOST_IOSSettings_shared().setCustomAction(name.UTF8String, action);
+  GHOST_IOSSettings_save();
+  [self updateCommandBarForContext];
 }
 
 - (void)applyTouchSettings:(const GHOST_IOSTouchSettings &)settings
 {
+  const bool spacing_changed = settings.touch_spacing != touch_settings.touch_spacing;
   touch_settings = settings;
   [self updateSettingsMenu];
+  if (spacing_changed) {
+    [self applyTouchSpacing];
+  }
 }
 
 - (void)updateCommandBarForContext
 {
-  int count = 0;
-  const GHOST_IOSBarKey *keys = GHOST_IOSCommandBar_keys(interaction_context, &count);
-  GHOST_IOSModifierBelt_setContextKeys(modifier_belt, keys, count);
+  custom_bar.build(interaction_context, GHOST_IOSSettings_shared());
+  GHOST_IOSModifierBelt_setContextKeys(modifier_belt, custom_bar.keys, custom_bar.count);
   GHOST_IOSModifierBelt_setKeyPadVisible(modifier_belt,
                                          GHOST_IOSCommandBar_wantsKeyPad(interaction_context));
 }
@@ -869,9 +1007,45 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   if (context == interaction_context) {
     return;
   }
+  const bool edges_changed = !context.sameResizeEdges(interaction_context);
   interaction_context = context;
   tool_history.update(context);
   [self updateCommandBarForContext];
+  if (self.isKeyWindow) {
+    GHOST_IOSMenuBar_setContext(context);
+  }
+  if (edges_changed && window != nullptr) {
+    GHOST_IOSResizeHandles_setEdges(resize_handles,
+                                    context.resize_edges,
+                                    context.resize_edges_num,
+                                    window->getWindowScaleFactor());
+  }
+}
+
+/* A drag on a grab handle is a mouse drag on the region's own resize edge. */
+- (void)resizeHandlePressAt:(CGPoint)client_point
+{
+  resize_handle_dragging = true;
+  virtual_pointer->moveAbsolute(client_point.x, client_point.y, GHOST_IOSPointerSource::Hardware);
+  virtual_pointer->button(GHOST_kButtonMaskLeft, true);
+}
+
+- (void)resizeHandleDragTo:(CGPoint)client_point
+{
+  if (resize_handle_dragging) {
+    virtual_pointer->moveAbsolute(
+        client_point.x, client_point.y, GHOST_IOSPointerSource::Hardware);
+  }
+}
+
+- (void)resizeHandleReleaseAt:(CGPoint)client_point
+{
+  if (!resize_handle_dragging) {
+    return;
+  }
+  resize_handle_dragging = false;
+  virtual_pointer->moveAbsolute(client_point.x, client_point.y, GHOST_IOSPointerSource::Hardware);
+  virtual_pointer->button(GHOST_kButtonMaskLeft, false);
 }
 
 /** Queue an operator call for the window manager and wake its loop. */
@@ -1051,9 +1225,48 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   [self applyModifierLatch];
 }
 
-- (void)commandBarKey:(GHOST_IOSKeyStroke)stroke
+- (void)commandBarKey:(const GHOST_IOSBarKey &)key
 {
-  [self sendKeyStroke:stroke];
+  if (key.command != nullptr) {
+    [self queueCommand:key.command];
+    return;
+  }
+  [self sendKeyStroke:key.stroke];
+}
+
+/* A menu bar item, sent through the responder chain. */
+- (void)blenderMenuCommand:(UICommand *)sender
+{
+  if (![sender.propertyList isKindOfClass:[NSString class]]) {
+    return;
+  }
+  char command[GHOST_IOS_COMMAND_MAX];
+  if ([(NSString *)sender.propertyList getCString:command
+                                        maxLength:GHOST_IOS_COMMAND_MAX
+                                         encoding:NSUTF8StringEncoding])
+  {
+    [self queueCommand:command];
+  }
+}
+
+- (void)commandBarEditKey:(int)index
+{
+  if (index < 0 || index >= custom_bar.count) {
+    return;
+  }
+  char name[GHOST_IOS_CUSTOM_NAME_MAX];
+  GHOST_IOSCustom_name(name, "bar", custom_bar.set, index);
+  [self editCustomization:name title:custom_bar.keys[index].title];
+}
+
+- (void)pencilPaletteEditSlot:(int)index
+{
+  if (index < 0 || index >= GHOST_IOS_PALETTE_SLOT_COUNT) {
+    return;
+  }
+  char name[GHOST_IOS_CUSTOM_NAME_MAX];
+  GHOST_IOSCustom_name(name, "palette", custom_palette.set, index);
+  [self editCustomization:name title:custom_palette.slots[index].title];
 }
 
 - (void)pencilPaletteChoseSlot:(int)index
@@ -1069,6 +1282,11 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
       break;
     case GHOST_IOSSlotKind::InvertBrush:
       [self toggleInvertBrush];
+      break;
+    case GHOST_IOSSlotKind::Command:
+      if (slot.command != nullptr) {
+        [self queueCommand:slot.command];
+      }
       break;
   }
 }
@@ -1086,7 +1304,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 /** \a point is in view points. */
 - (void)showPencilPaletteAt:(CGPoint)point
 {
-  pencil_palette_slots = GHOST_IOSPalette_slots(interaction_context);
+  custom_palette.build(interaction_context, GHOST_IOSSettings_shared());
+  pencil_palette_slots = custom_palette.slots;
   GHOST_IOSPencilPalette_show(
       pencil_palette, point, pencil_palette_slots, GHOST_IOS_PALETTE_SLOT_COUNT);
 }
@@ -1159,7 +1378,44 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
       [self generateKeyEvent:GHOST_kKeyF3 down:true utf8:nullptr];
       [self generateKeyEvent:GHOST_kKeyF3 down:false utf8:nullptr];
       break;
+    case GHOST_IOSGestureAction::Focus:
+      [self toggleFocusMode];
+      break;
   }
+}
+
+/** Focus mode: the editor under the pointer fills the window with every panel hidden. */
+- (void)toggleFocusMode
+{
+  char command[GHOST_IOS_COMMAND_MAX];
+  if (GHOST_IOSCommand_format(command, "screen.screen_full_area", "use_hide_panels", "1")) {
+    [self queueCommand:command];
+  }
+}
+
+- (void)commandBarAction:(GHOST_IOSBarAction)action
+{
+  char command[GHOST_IOS_COMMAND_MAX];
+  switch (action) {
+    case GHOST_IOSBarAction::Focus:
+      [self toggleFocusMode];
+      return;
+    case GHOST_IOSBarAction::Properties:
+      GHOST_IOSCommand_format(command, "ios.open_editor", "space", "PROPERTIES");
+      break;
+    case GHOST_IOSBarAction::Outliner:
+      GHOST_IOSCommand_format(command, "ios.open_editor", "space", "OUTLINER");
+      break;
+  }
+  [self queueCommand:command];
+}
+
+- (void)applyTouchSpacing
+{
+  char command[GHOST_IOS_COMMAND_MAX];
+  GHOST_IOSCommand_format(
+      command, "ios.touch_spacing", "enabled", touch_settings.touch_spacing ? "1" : "0");
+  [self queueCommand:command];
 }
 
 - (void)handleCloseWindow
@@ -1594,6 +1850,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   if (GHOST_IOSPencilPalette_containsView(pencil_palette, touch.view)) {
     return NO;
   }
+  if (GHOST_IOSResizeHandles_containsView(resize_handles, touch.view)) {
+    return NO;
+  }
   return YES;
 }
 
@@ -1638,7 +1897,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
             [touch.view isDescendantOfView:close_window_button])) ||
           GHOST_IOSFileAccess_containsView(file_access_controls, touch.view) ||
           GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view) ||
-          GHOST_IOSPencilPalette_containsView(pencil_palette, touch.view))
+          GHOST_IOSPencilPalette_containsView(pencil_palette, touch.view) ||
+          GHOST_IOSResizeHandles_containsView(resize_handles, touch.view))
       {
         continue;
       }
@@ -2080,24 +2340,37 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     return;
   }
 
-  UIView *view = window->getView();
-  CGPoint location = [gesture locationInView:view];
-
-  GHOST_TTouchEventSubTypes ghostEventType;
-
+  /* Swiping in from the left edge toggles the tool shelf (T) of the editor under the swipe, and
+   * from the right edge its sidebar (N), like `UISplitViewController` columns. The swipe must
+   * start at the screen edge, so it never takes over Blender's own region drag handles. */
+  const char *data_path = nullptr;
   if (gesture.edges == UIRectEdgeLeft) {
-    ghostEventType = GHOST_kTouchEventEdgeSwipeInLeft;
+    data_path = "space_data.show_region_toolbar";
   }
   else if (gesture.edges == UIRectEdgeRight) {
-    ghostEventType = GHOST_kTouchEventEdgeSwipeInRight;
+    data_path = "space_data.show_region_ui";
   }
   else {
-    /* For now only handle left/right. */
     return;
   }
-
-  system->pushEvent(std::make_unique<GHOST_EventTouch>(
-      system->getMilliSeconds(), window, ghostEventType, location.x, location.y));
+  CGPoint location = [gesture locationInView:window->getView()];
+  /* Act on the editor where the swipe ended, a little inside the screen edge. */
+  location.x = gesture.edges == UIRectEdgeLeft ? std::max<CGFloat>(location.x, 24.0f) :
+                                                 std::min<CGFloat>(
+                                                     location.x,
+                                                     window->getView().bounds.size.width - 24.0f);
+  const CGPoint client = window->scalePointToWindow(location);
+  char command[GHOST_IOS_COMMAND_MAX];
+  if (GHOST_IOSCommand_formatAt(command,
+                                int(client.x),
+                                int(client.y),
+                                "wm.context_toggle",
+                                "data_path",
+                                data_path))
+  {
+    GHOST_IOSStyle_selectionFeedback();
+    [self queueCommand:command];
+  }
 }
 
 - (void)handleHover:(GHOSTUIHoverGestureRecognizer *)sender
