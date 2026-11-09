@@ -19,4 +19,11 @@ extern const bTheme U_theme_default;
 }
 #endif
 
+/**
+ * Adjust a theme initialized from #U_theme_default for the current platform.
+ * A no-op unless the platform defines a theme, see:
+ * `release/datafiles/userdef/userdef_platform_theme.cc`.
+ */
+void BLO_userdef_theme_apply_platform(bTheme *btheme);
+
 }  // namespace blender
