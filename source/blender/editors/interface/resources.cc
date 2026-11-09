@@ -1152,6 +1152,7 @@ void init_default()
 
   const int active_theme_area = btheme->active_theme_area;
   MEMCPY_STRUCT_AFTER(btheme, &U_theme_default, name);
+  BLO_userdef_theme_apply_platform(btheme);
   btheme->active_theme_area = active_theme_area;
 }
 

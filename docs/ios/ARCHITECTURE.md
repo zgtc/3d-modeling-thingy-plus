@@ -139,6 +139,28 @@ tap emits a balanced right click at the first tap's cached position. The normal
 single tap waits for the double-tap recognizer to fail so both actions cannot
 fire. Every recognizer is detached and released with its GHOST window.
 
+## Native control and theme styling
+
+The UIKit controls that float over Blender (modifier belt, child-window close
+button, file-location button) take their shape, accent, and material from
+`GHOST_IOSStyle`. On iOS 26 and later they use Liquid Glass (`UIGlassEffect`
+and the glass button configuration); the iOS 18 deployment floor keeps a dark
+blur or translucent fill. The accent follows `UIColor.tintColor`, so it tracks
+the system accent instead of a fixed blue. Modifier tap, lock, expand, and
+corner-snap changes emit selection haptics; holding a key does not. The text
+entry toolbar marks Done as the prominent action on iOS 26.
+
+Blender's own interface is drawn in Metal, so it cannot adopt UIKit materials.
+The iOS build instead defines `BLENDER_PLATFORM_IOS_THEME`, and
+`BLO_userdef_theme_apply_platform` adjusts the factory theme after it is copied
+from `U_theme_default`, both for new preferences and for "Reset to Default
+Theme". It applies the iOS dark palette, the system blue accent, flat rounded
+controls, grouped-cell panels on black, and translucent region bars. Colors with
+modeling meaning (viewport canvas, selection, active object, axes, keyframes,
+bone and collection colors, node editor canvas) keep Blender's values. Other
+platforms compile the function as a no-op, and the bundled "Blender Dark" preset
+restores the stock look.
+
 ## Metal ownership and memory soak
 
 The generic Metal backend follows Objective-C's create rule: objects returned

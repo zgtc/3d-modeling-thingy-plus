@@ -16,6 +16,7 @@
 #import <os/log.h>
 
 #include "GHOST_IOSModifierBelt.hh"
+#include "GHOST_IOSStyle.hh"
 
 #include <cstdlib>
 #include <cstring>
@@ -32,7 +33,7 @@ static NSString *const GHOST_IOSModifierBeltCorner = @"GHOST_IOSModifierBeltCorn
 
 static constexpr CGFloat belt_height = 52.0f;
 static constexpr CGFloat belt_padding = 4.0f;
-static constexpr CGFloat handle_size = 44.0f;
+static constexpr CGFloat handle_size = GHOST_IOS_CONTROL_SIZE;
 static constexpr CGFloat key_width = 58.0f;
 static constexpr CGFloat edge_inset = 12.0f;
 /** Keep the bottom corners clear of Blender's status bar. */
@@ -76,10 +77,7 @@ static NSString *GHOST_IOSModifierModeName(const GHOST_IOSModifierMode mode)
 
 static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
 {
-  UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration
-      configurationWithPointSize:size
-                          weight:UIImageSymbolWeightSemibold];
-  return [UIImage systemImageNamed:name withConfiguration:config];
+  return GHOST_IOSStyle_symbol(name, size);
 }
 
 /* -------------------------------------------------------------------- */
@@ -117,7 +115,8 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   tracked_touch_ = nil;
 
   self.translatesAutoresizingMaskIntoConstraints = NO;
-  self.layer.cornerRadius = 12.0f;
+  /* Capsule keys, matching the glass belt they sit in. */
+  self.layer.cornerRadius = handle_size * 0.5f;
   self.layer.cornerCurve = kCACornerCurveContinuous;
   self.isAccessibilityElement = YES;
   self.accessibilityTraits = UIAccessibilityTraitButton;
@@ -178,18 +177,27 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
 
 - (void)setMode:(GHOST_IOSModifierMode)mode
 {
+  /* Holding is already felt through the finger; only tap and lock changes need a haptic. */
+  const bool tactile_change = mode != mode_ && mode != GHOST_IOSModifierMode::Held &&
+                              mode_ != GHOST_IOSModifierMode::Held;
   mode_ = mode;
+  UIColor *accent = GHOST_IOSStyle_accentColor();
   switch (mode) {
     case GHOST_IOSModifierMode::Off:
-      self.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.10f];
+      /* Glass already reads as a surface, so an idle key only needs a faint fill. */
+      self.backgroundColor = [UIColor colorWithWhite:1.0f
+                                               alpha:GHOST_IOSStyle_hasGlass() ? 0.06f : 0.10f];
       break;
     case GHOST_IOSModifierMode::Latched:
-      self.backgroundColor = [UIColor.systemBlueColor colorWithAlphaComponent:0.5f];
+      self.backgroundColor = [accent colorWithAlphaComponent:0.5f];
       break;
     case GHOST_IOSModifierMode::Held:
     case GHOST_IOSModifierMode::Locked:
-      self.backgroundColor = UIColor.systemBlueColor;
+      self.backgroundColor = accent;
       break;
+  }
+  if (tactile_change) {
+    GHOST_IOSStyle_selectionFeedback();
   }
   lock_bar_.hidden = mode != GHOST_IOSModifierMode::Locked;
   self.accessibilityValue = GHOST_IOSModifierModeName(mode);
@@ -301,23 +309,21 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   self.translatesAutoresizingMaskIntoConstraints = NO;
   self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
   self.accessibilityIdentifier = @"blender_modifier_belt";
-  self.layer.shadowColor = UIColor.blackColor.CGColor;
-  self.layer.shadowOpacity = 0.3f;
-  self.layer.shadowRadius = 8.0f;
-  self.layer.shadowOffset = CGSizeMake(0.0f, 2.0f);
+  if (!GHOST_IOSStyle_hasGlass()) {
+    /* Liquid Glass draws its own depth; the blur fallback needs a shadow to lift it. */
+    self.layer.shadowColor = UIColor.blackColor.CGColor;
+    self.layer.shadowOpacity = 0.3f;
+    self.layer.shadowRadius = 8.0f;
+    self.layer.shadowOffset = CGSizeMake(0.0f, 2.0f);
+  }
 
-  background_ = [[UIVisualEffectView alloc]
-      initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
-  background_.translatesAutoresizingMaskIntoConstraints = NO;
-  background_.layer.cornerRadius = belt_height * 0.5f;
-  background_.layer.cornerCurve = kCACornerCurveContinuous;
-  background_.clipsToBounds = YES;
-  background_.userInteractionEnabled = NO;
+  background_ = GHOST_IOSStyle_createMaterialView(belt_height * 0.5f);
   [self addSubview:background_];
 
   handle_ = [[UIView alloc] init];
   handle_.translatesAutoresizingMaskIntoConstraints = NO;
   handle_.layer.cornerRadius = handle_size * 0.5f;
+  handle_.layer.cornerCurve = kCACornerCurveContinuous;
   handle_.isAccessibilityElement = YES;
   handle_.accessibilityTraits = UIAccessibilityTraitButton;
   handle_.accessibilityLabel = @"Modifier keys";
@@ -493,7 +499,7 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
     }
   }
   handle_icon_.image = GHOST_IOSModifierSymbol(symbol, 18.0f);
-  handle_.backgroundColor = any_active ? UIColor.systemBlueColor : UIColor.clearColor;
+  handle_.backgroundColor = any_active ? GHOST_IOSStyle_accentColor() : UIColor.clearColor;
   handle_.accessibilityValue = expanded_ ? @"expanded" : @"collapsed";
 }
 
@@ -528,6 +534,7 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
 - (void)handleTap:(UITapGestureRecognizer *)sender
 {
   if (sender.state == UIGestureRecognizerStateEnded) {
+    GHOST_IOSStyle_selectionFeedback();
     [self setExpanded:!expanded_];
   }
 }
@@ -560,6 +567,7 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   corner_ = top ? (left ? GHOST_IOS_BELT_TOP_LEFT : GHOST_IOS_BELT_TOP_RIGHT) :
                   (left ? GHOST_IOS_BELT_BOTTOM_LEFT : GHOST_IOS_BELT_BOTTOM_RIGHT);
   [NSUserDefaults.standardUserDefaults setInteger:corner_ forKey:GHOST_IOSModifierBeltCorner];
+  GHOST_IOSStyle_selectionFeedback();
 
   self.transform = CGAffineTransformIdentity;
   [self arrangeForCorner];

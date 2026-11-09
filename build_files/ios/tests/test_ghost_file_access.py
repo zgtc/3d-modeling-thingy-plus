@@ -8,6 +8,7 @@ REPOSITORY = Path(__file__).resolve().parents[3]
 WINDOW_SOURCE = REPOSITORY / "intern" / "ghost" / "intern" / "GHOST_WindowIOS.mm"
 ACCESS_HEADER = REPOSITORY / "intern" / "ghost" / "intern" / "GHOST_IOSFileAccess.hh"
 ACCESS_SOURCE = REPOSITORY / "intern" / "ghost" / "intern" / "GHOST_IOSFileAccess.mm"
+STYLE_SOURCE = REPOSITORY / "intern" / "ghost" / "intern" / "GHOST_IOSStyle.mm"
 FILE_MENU_SOURCE = (
     REPOSITORY / "source" / "blender" / "editors" / "space_file" / "fsmenu_system_ios.mm"
 )
@@ -37,7 +38,7 @@ class GhostFileAccessTests(unittest.TestCase):
         self.assertIn('strcmp(window_title, "Blender File View")', access_source)
         self.assertIn('strcmp(window_title, "File Browser")', access_source)
         self.assertIn('accessibilityIdentifier = @"blender_file_browser_add_location";', access_source)
-        self.assertIn('systemImageNamed:@"folder.badge.plus"', access_source)
+        self.assertIn('@"folder.badge.plus"', access_source)
 
     def test_window_title_refresh_does_not_destroy_an_open_picker(self) -> None:
         window_source = WINDOW_SOURCE.read_text()
@@ -52,8 +53,12 @@ class GhostFileAccessTests(unittest.TestCase):
     def test_control_is_a_small_circle_immediately_left_of_close(self) -> None:
         access_source = ACCESS_SOURCE.read_text()
 
-        self.assertIn("glassButtonConfiguration", access_source)
-        self.assertIn("constraintEqualToConstant:44.0f", access_source)
+        style_source = STYLE_SOURCE.read_text()
+
+        self.assertIn('GHOST_IOSStyle_applyFloatingButton(button_, @"folder.badge.plus")',
+                      access_source)
+        self.assertIn("glassButtonConfiguration", style_source)
+        self.assertIn("constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE", access_source)
         self.assertIn("constraintEqualToAnchor:close_button.leadingAnchor", access_source)
         self.assertIn("constraintEqualToAnchor:close_button.centerYAnchor", access_source)
 

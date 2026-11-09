@@ -1550,6 +1550,7 @@ UserDef *BKE_blendfile_userdef_from_defaults()
   {
     bTheme *btheme = MEM_new_uninitialized<bTheme>(__func__);
     memcpy(btheme, &U_theme_default, sizeof(*btheme));
+    BLO_userdef_theme_apply_platform(btheme);
 
     BLI_addtail(&userdef->themes, btheme);
   }

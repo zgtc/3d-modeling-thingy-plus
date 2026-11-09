@@ -14,6 +14,7 @@
 #include "GHOST_IOSModifierBelt.hh"
 #include "GHOST_IOSModifierLatch.hh"
 #include "GHOST_IOSPencilContact.hh"
+#include "GHOST_IOSStyle.hh"
 #include "GHOST_IOSVirtualPointer.hh"
 #include "GHOST_SystemIOS.hh"
 
@@ -762,11 +763,7 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   close_window_button.translatesAutoresizingMaskIntoConstraints = NO;
   close_window_button.accessibilityLabel = @"Close window";
   close_window_button.accessibilityIdentifier = @"blender_child_window_close";
-  close_window_button.tintColor = UIColor.whiteColor;
-  close_window_button.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.65f];
-  close_window_button.layer.cornerRadius = 22.0f;
-  [close_window_button setImage:[UIImage systemImageNamed:@"xmark"]
-                       forState:UIControlStateNormal];
+  GHOST_IOSStyle_applyFloatingButton(close_window_button, @"xmark");
   [close_window_button addTarget:self
                           action:@selector(handleCloseWindow)
                 forControlEvents:UIControlEventTouchUpInside];
@@ -774,8 +771,8 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
 
   UILayoutGuide *safe_area = input_view.safeAreaLayoutGuide;
   [NSLayoutConstraint activateConstraints:@[
-    [close_window_button.widthAnchor constraintEqualToConstant:44.0f],
-    [close_window_button.heightAnchor constraintEqualToConstant:44.0f],
+    [close_window_button.widthAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
+    [close_window_button.heightAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
     [close_window_button.topAnchor constraintEqualToAnchor:safe_area.topAnchor constant:8.0f],
     [close_window_button.trailingAnchor constraintEqualToAnchor:safe_area.trailingAnchor
                                                         constant:-8.0f],
@@ -1951,6 +1948,11 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
       initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
                            target:self
                            action:@selector(handleCancelButton)];
+
+  if (@available(iOS 26.0, *)) {
+    /* The confirming action of a Liquid Glass toolbar is tinted, like system sheets. */
+    toolbar_done_editing_item.style = UIBarButtonItemStyleProminent;
+  }
 
   toolbar_cancel_editing_item.accessibilityIdentifier = @"blender_text_entry_cancel";
   toolbar_done_editing_item.accessibilityIdentifier = @"blender_text_entry_done";

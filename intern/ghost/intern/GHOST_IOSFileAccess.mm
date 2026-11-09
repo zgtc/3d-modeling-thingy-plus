@@ -8,6 +8,7 @@
  */
 
 #include "GHOST_IOSFileAccess.hh"
+#include "GHOST_IOSStyle.hh"
 
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
@@ -60,26 +61,7 @@ static os_log_t GHOST_IOS_file_access_log()
   button_.accessibilityLabel = @"Add file location";
   button_.accessibilityHint = @"Choose a folder that Blender can access";
   button_.accessibilityIdentifier = @"blender_file_browser_add_location";
-  button_.tintColor = UIColor.whiteColor;
-
-  UIImageSymbolConfiguration *symbol_configuration = [UIImageSymbolConfiguration
-      configurationWithPointSize:14.0f
-                          weight:UIImageSymbolWeightSemibold];
-  UIImage *image = [UIImage systemImageNamed:@"folder.badge.plus"
-                           withConfiguration:symbol_configuration];
-
-  if (@available(iOS 26.0, *)) {
-    UIButtonConfiguration *configuration = [UIButtonConfiguration glassButtonConfiguration];
-    configuration.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-    configuration.baseForegroundColor = UIColor.whiteColor;
-    configuration.image = image;
-    button_.configuration = configuration;
-  }
-  else {
-    button_.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.65f];
-    button_.layer.cornerRadius = 22.0f;
-    [button_ setImage:image forState:UIControlStateNormal];
-  }
+  GHOST_IOSStyle_applyFloatingButton(button_, @"folder.badge.plus");
 
   [button_ addTarget:self
                 action:@selector(showFolderPicker)
@@ -87,8 +69,8 @@ static os_log_t GHOST_IOS_file_access_log()
   [input_view addSubview:button_];
 
   [NSLayoutConstraint activateConstraints:@[
-    [button_.widthAnchor constraintEqualToConstant:44.0f],
-    [button_.heightAnchor constraintEqualToConstant:44.0f],
+    [button_.widthAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
+    [button_.heightAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
     [button_.centerYAnchor constraintEqualToAnchor:close_button.centerYAnchor],
     [button_.trailingAnchor constraintEqualToAnchor:close_button.leadingAnchor constant:-8.0f],
   ]];
