@@ -11,7 +11,9 @@
 #include "GHOST_ContextIOS.hh"
 #include "GHOST_IOSFileAccess.hh"
 #include "GHOST_IOSInputTuning.hh"
+#include "GHOST_IOSInteraction.hh"
 #include "GHOST_IOSModifierBelt.hh"
+#include "GHOST_IOSPencilPalette.hh"
 #include "GHOST_IOSModifierLatch.hh"
 #include "GHOST_IOSPencilContact.hh"
 #include "GHOST_IOSStyle.hh"
@@ -338,7 +340,8 @@ typedef struct UserInputEvent {
 @interface GHOSTUIWindow : UIWindow <UIGestureRecognizerDelegate,
                                       UIPencilInteractionDelegate,
                                       UITextFieldDelegate,
-                                      GHOSTIOSModifierBeltDelegate>
+                                      GHOSTIOSModifierBeltDelegate,
+                                      GHOSTIOSPencilPaletteDelegate>
 {
   GHOST_SystemIOS *system;
   GHOST_WindowIOS *window;
@@ -391,9 +394,24 @@ typedef struct UserInputEvent {
   UIButton *close_window_button;
   NSObject *file_access_controls;
 
-  /* On-screen Shift, Ctrl and Alt. */
+  /* On-screen command bar: modifiers, shortcut keys and the transform key pad. */
   NSObject *modifier_belt;
   GHOST_IOSModifierLatch *modifier_latch;
+
+  /* Apple Pencil palette and the touch settings behind it. */
+  NSObject *pencil_palette;
+  const GHOST_IOSPaletteSlot *pencil_palette_slots;
+  GHOST_IOSTouchSettings touch_settings;
+  /** Where the Pencil was last seen, in view points, for palettes opened without a hover pose. */
+  CGPoint last_pencil_view_point;
+  /** A finger drag that orbits instead of clicking, for Pencil-only drawing. */
+  bool finger_navigation_active;
+  CGPoint finger_navigation_point;
+
+  /* What the window manager reported under the pointer, and operator calls queued for it. */
+  GHOST_IOSInteractionContext interaction_context;
+  GHOST_IOSToolHistory tool_history;
+  NSMutableArray<NSString *> *queued_commands;
 }
 
 - (void)setSystemAndWindowIOS:(GHOST_SystemIOS *)sysCocoa windowIOS:(GHOST_WindowIOS *)winCocoa;
@@ -403,6 +421,8 @@ typedef struct UserInputEvent {
 - (void)registerModifierBelt;
 - (void)modifierBeltPointerButton:(bool)pressed;
 - (void)modifierBeltCursorMoved:(CGPoint)point visible:(bool)visible;
+- (void)setInteractionContext:(const GHOST_IOSInteractionContext &)context;
+- (bool)takeCommand:(char *)command;
 - (void)updateFileAccessControls;
 - (void)handleCloseWindow;
 - (BOOL)allowsPointerLock;
@@ -628,6 +648,14 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   file_access_controls = nil;
   modifier_belt = nil;
   modifier_latch = new GHOST_IOSModifierLatch();
+  pencil_palette = nil;
+  pencil_palette_slots = nullptr;
+  touch_settings = GHOST_IOSTouchSettings_load();
+  last_pencil_view_point = CGPointZero;
+  finger_navigation_active = false;
+  finger_navigation_point = CGPointZero;
+  interaction_context = GHOST_IOSInteractionContext();
+  queued_commands = [[NSMutableArray alloc] init];
 }
 
 - (void)releaseGestureRecognizer:(UIGestureRecognizer *)recognizer fromView:(UIView *)view
@@ -653,6 +681,11 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   modifier_belt = nil;
   delete modifier_latch;
   modifier_latch = nullptr;
+  GHOST_IOSPencilPalette_destroy(pencil_palette);
+  pencil_palette = nil;
+  pencil_palette_slots = nullptr;
+  [queued_commands release];
+  queued_commands = nil;
 
   if (close_window_button != nil) {
     [close_window_button removeTarget:self
@@ -801,6 +834,71 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
     return;
   }
   modifier_belt = GHOST_IOSModifierBelt_create(window->getView(), self);
+  pencil_palette = GHOST_IOSPencilPalette_create(window->getView(), self);
+  [self updateSettingsMenu];
+  [self updateCommandBarForContext];
+}
+
+- (void)updateSettingsMenu
+{
+  GHOSTUIWindow *ui_window = self;
+  UIMenu *menu = GHOST_IOSTouchSettings_menu(touch_settings,
+                                             ^(const GHOST_IOSTouchSettings &settings) {
+                                               [ui_window applyTouchSettings:settings];
+                                             });
+  GHOST_IOSModifierBelt_setSettingsMenu(modifier_belt, menu);
+}
+
+- (void)applyTouchSettings:(const GHOST_IOSTouchSettings &)settings
+{
+  touch_settings = settings;
+  [self updateSettingsMenu];
+}
+
+- (void)updateCommandBarForContext
+{
+  int count = 0;
+  const GHOST_IOSBarKey *keys = GHOST_IOSCommandBar_keys(interaction_context, &count);
+  GHOST_IOSModifierBelt_setContextKeys(modifier_belt, keys, count);
+  GHOST_IOSModifierBelt_setKeyPadVisible(modifier_belt,
+                                         GHOST_IOSCommandBar_wantsKeyPad(interaction_context));
+}
+
+- (void)setInteractionContext:(const GHOST_IOSInteractionContext &)context
+{
+  if (context == interaction_context) {
+    return;
+  }
+  interaction_context = context;
+  tool_history.update(context);
+  [self updateCommandBarForContext];
+}
+
+/** Queue an operator call for the window manager and wake its loop. */
+- (void)queueCommand:(const char *)command
+{
+  if (queued_commands == nil || system == nullptr || window == nullptr) {
+    return;
+  }
+  [queued_commands addObject:[NSString stringWithUTF8String:command]];
+  system->pushEvent(std::make_unique<GHOST_Event>(
+      system->getMilliSeconds(), GHOST_kEventWindowUpdate, window));
+}
+
+- (bool)takeCommand:(char *)command
+{
+  if (queued_commands.count == 0) {
+    return false;
+  }
+  NSString *next = queued_commands.firstObject;
+  const bool fits = [next getCString:command
+                           maxLength:GHOST_IOS_COMMAND_MAX
+                            encoding:NSUTF8StringEncoding];
+  [queued_commands removeObjectAtIndex:0];
+  if (!fits) {
+    command[0] = '\0';
+  }
+  return fits;
 }
 
 static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier)
@@ -812,6 +910,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
       return GHOST_kModifierKeyLeftControl;
     case GHOST_IOSModifier::Alt:
       return GHOST_kModifierKeyLeftAlt;
+    case GHOST_IOSModifier::OS:
+      return GHOST_kModifierKeyLeftOS;
   }
   return GHOST_kModifierKeyLeftShift;
 }
@@ -898,6 +998,168 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 - (void)modifierBeltCursorMoved:(CGPoint)point visible:(bool)visible
 {
   GHOST_IOSModifierBelt_setCursor(modifier_belt, point, visible);
+}
+
+/**
+ * Send a key stroke from the command bar or the Pencil palette. Latched modifiers apply to it,
+ * like to the next click, and the stroke's own modifiers are held around it.
+ */
+- (void)sendKeyStroke:(const GHOST_IOSKeyStroke &)stroke
+{
+  if (modifier_latch == nullptr || system == nullptr || window == nullptr ||
+      stroke.key == GHOST_kKeyUnknown)
+  {
+    return;
+  }
+  modifier_latch->pointerPressed();
+  [self applyModifierLatch];
+
+  struct StrokeModifier {
+    uint8_t flag;
+    GHOST_TModifierKey modifier;
+  };
+  constexpr StrokeModifier stroke_modifiers[] = {
+      {GHOST_IOS_STROKE_SHIFT, GHOST_kModifierKeyLeftShift},
+      {GHOST_IOS_STROKE_CTRL, GHOST_kModifierKeyLeftControl},
+      {GHOST_IOS_STROKE_ALT, GHOST_kModifierKeyLeftAlt},
+      {GHOST_IOS_STROKE_OS, GHOST_kModifierKeyLeftOS},
+  };
+  GHOST_ModifierKeys keys;
+  system->getModifierKeys(keys);
+  bool pressed[4] = {false, false, false, false};
+  for (int i = 0; i < 4; i++) {
+    if ((stroke.modifiers & stroke_modifiers[i].flag) && !keys.get(stroke_modifiers[i].modifier)) {
+      [self generateKeyEvent:GHOST_ModifierKeys::getModifierKeyCode(stroke_modifiers[i].modifier)
+                        down:true
+                        utf8:nullptr];
+      pressed[i] = true;
+    }
+  }
+  /* Modified strokes are shortcuts, never typed text. */
+  const char *utf8 = stroke.modifiers == 0 ? stroke.utf8 : nullptr;
+  [self generateKeyEvent:stroke.key down:true utf8:utf8];
+  [self generateKeyEvent:stroke.key down:false utf8:nullptr];
+  for (int i = 3; i >= 0; i--) {
+    if (pressed[i]) {
+      [self generateKeyEvent:GHOST_ModifierKeys::getModifierKeyCode(stroke_modifiers[i].modifier)
+                        down:false
+                        utf8:nullptr];
+    }
+  }
+
+  modifier_latch->pointerReleased();
+  [self applyModifierLatch];
+}
+
+- (void)commandBarKey:(GHOST_IOSKeyStroke)stroke
+{
+  [self sendKeyStroke:stroke];
+}
+
+- (void)pencilPaletteChoseSlot:(int)index
+{
+  const GHOST_IOSPaletteSlot *slots = pencil_palette_slots;
+  if (slots == nullptr || index < 0 || index >= GHOST_IOS_PALETTE_SLOT_COUNT) {
+    return;
+  }
+  const GHOST_IOSPaletteSlot &slot = slots[index];
+  switch (slot.kind) {
+    case GHOST_IOSSlotKind::Key:
+      [self sendKeyStroke:slot.stroke];
+      break;
+    case GHOST_IOSSlotKind::InvertBrush:
+      [self toggleInvertBrush];
+      break;
+  }
+}
+
+/** Ctrl inverts sculpt and paint strokes; keep it on for the next strokes until toggled off. */
+- (void)toggleInvertBrush
+{
+  if (modifier_latch == nullptr) {
+    return;
+  }
+  modifier_latch->toggleLock(GHOST_IOSModifier::Control);
+  [self applyModifierLatch];
+}
+
+/** \a point is in view points. */
+- (void)showPencilPaletteAt:(CGPoint)point
+{
+  pencil_palette_slots = GHOST_IOSPalette_slots(interaction_context);
+  GHOST_IOSPencilPalette_show(
+      pencil_palette, point, pencil_palette_slots, GHOST_IOS_PALETTE_SLOT_COUNT);
+}
+
+- (void)runPencilAction:(GHOST_IOSPencilAction)action at:(CGPoint)view_point
+{
+  switch (action) {
+    case GHOST_IOSPencilAction::None:
+      break;
+    case GHOST_IOSPencilAction::AskUser: {
+      GHOSTUIWindow *ui_window = self;
+      GHOST_IOSPencil_askDoubleTap(self.rootViewController,
+                                   window->getView(),
+                                   view_point,
+                                   ^(GHOST_IOSDoubleTapChoice choice) {
+                                     [ui_window chooseDoubleTap:choice];
+                                   });
+      break;
+    }
+    case GHOST_IOSPencilAction::RightClick:
+      virtual_pointer->setSource(GHOST_IOSPointerSource::Pencil);
+      virtual_pointer->click(GHOST_kButtonMaskRight, tablet_data);
+      break;
+    case GHOST_IOSPencilAction::PreviousTool: {
+      char command[GHOST_IOS_COMMAND_MAX];
+      if (GHOST_IOSCommand_format(command, "wm.tool_set_by_id", "name", tool_history.previous()) &&
+          tool_history.previous()[0] != '\0')
+      {
+        [self queueCommand:command];
+      }
+      break;
+    }
+    case GHOST_IOSPencilAction::Palette:
+      [self showPencilPaletteAt:view_point];
+      break;
+    case GHOST_IOSPencilAction::Eraser:
+      [self toggleInvertBrush];
+      break;
+  }
+}
+
+- (void)chooseDoubleTap:(GHOST_IOSDoubleTapChoice)choice
+{
+  touch_settings.double_tap = choice;
+  GHOST_IOSTouchSettings_save(touch_settings);
+  [self updateSettingsMenu];
+}
+
+/** Where a Pencil interaction happened, in view points. */
+- (CGPoint)pencilInteractionPoint:(UIPencilHoverPose *)pose
+{
+  if (pose != nil) {
+    return pose.location;
+  }
+  return last_pencil_view_point;
+}
+
+- (void)runTapGesture:(int)gesture
+{
+  switch (touch_settings.tap_gestures[gesture]) {
+    case GHOST_IOSGestureAction::None:
+      break;
+    case GHOST_IOSGestureAction::Undo:
+      [self generateUndoRedoShortcut:false];
+      break;
+    case GHOST_IOSGestureAction::Redo:
+      [self generateUndoRedoShortcut:true];
+      break;
+    case GHOST_IOSGestureAction::Search:
+      [self generateKeyEvent:GHOST_kKeyF3 down:true utf8:nullptr];
+      [self generateKeyEvent:GHOST_kKeyF3 down:false utf8:nullptr];
+      break;
+  }
 }
 
 - (void)handleCloseWindow
@@ -1329,6 +1591,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   if (GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view)) {
     return NO;
   }
+  if (GHOST_IOSPencilPalette_containsView(pencil_palette, touch.view)) {
+    return NO;
+  }
   return YES;
 }
 
@@ -1372,7 +1637,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
            (touch.view == close_window_button ||
             [touch.view isDescendantOfView:close_window_button])) ||
           GHOST_IOSFileAccess_containsView(file_access_controls, touch.view) ||
-          GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view))
+          GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view) ||
+          GHOST_IOSPencilPalette_containsView(pencil_palette, touch.view))
       {
         continue;
       }
@@ -1521,6 +1787,10 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     virtual_pointer->moveAbsolute(point.x, point.y, source, click_tablet);
   }
   else {
+    if (!GHOST_IOSFinger_mayClick(touch_settings, interaction_context)) {
+      /* Only the Pencil selects and paints in the viewport. */
+      return;
+    }
     virtual_pointer->setSource(GHOST_IOSPointerSource::Finger);
   }
   virtual_pointer->click(GHOST_kButtonMaskLeft, click_tablet);
@@ -1532,15 +1802,44 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     return;
   }
 
+  [sender resetFirstTapPoint];
+  if (!GHOST_IOSFinger_mayClick(touch_settings, interaction_context)) {
+    return;
+  }
   virtual_pointer->setSource(GHOST_IOSPointerSource::Finger);
   virtual_pointer->click(GHOST_kButtonMaskLeft);
   virtual_pointer->click(GHOST_kButtonMaskLeft);
-  [sender resetFirstTapPoint];
 }
 
 - (void)handleDoubleTapDrag:(GHOSTUILongPressGestureRecognizer *)sender
 {
   const CGPoint point = [sender getScaledTouchPoint:window];
+  if (sender.state == UIGestureRecognizerStateBegan &&
+      !GHOST_IOSFinger_mayClick(touch_settings, interaction_context))
+  {
+    /* Pencil-only drawing: a finger drag orbits the view, like a two-finger drag. */
+    finger_navigation_active = true;
+    finger_navigation_point = point;
+    return;
+  }
+  if (finger_navigation_active) {
+    if (sender.state == UIGestureRecognizerStateChanged) {
+      CGPoint delta = CGPointMake(point.x - finger_navigation_point.x,
+                                  point.y - finger_navigation_point.y);
+      finger_navigation_point = point;
+      if (!CGPointEqualToPoint(delta, CGPointZero)) {
+        CGPoint pointer = [self getVirtualPointerPoint];
+        UserInputEvent event_info(&pointer, &delta, nullptr);
+        event_info.add_event(UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS);
+        [self generateUserInputEvents:event_info];
+      }
+    }
+    else if (sender.state != UIGestureRecognizerStateBegan) {
+      finger_navigation_active = false;
+    }
+    return;
+  }
+
   if (sender.state == UIGestureRecognizerStateBegan) {
     virtual_pointer->beginRelative(point.x, point.y);
     virtual_pointer->button(GHOST_kButtonMaskLeft, true);
@@ -1596,7 +1895,7 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     return;
   }
 
-  [self generateUndoRedoShortcut:false];
+  [self runTapGesture:0];
 }
 
 - (void)handleTap3F:(GHOSTUITapGestureRecognizer *)sender
@@ -1605,7 +1904,7 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     return;
   }
 
-  [self generateUndoRedoShortcut:true];
+  [self runTapGesture:1];
 }
 
 - (void)handleTap4F:(GHOSTUITapGestureRecognizer *)sender
@@ -1614,8 +1913,7 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     return;
   }
 
-  [self generateKeyEvent:GHOST_kKeyF3 down:true utf8:nullptr];
-  [self generateKeyEvent:GHOST_kKeyF3 down:false utf8:nullptr];
+  [self runTapGesture:2];
 }
 
 - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender
@@ -1825,6 +2123,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     else {
       tablet_data = GHOST_TABLET_DATA_NONE;
     }
+    if ([sender getTouchType] == UITouchTypePencil) {
+      last_pencil_view_point = [sender locationInView:window->getView()];
+    }
     const CGPoint hover_point = [sender getScaledTouchPoint:window];
     virtual_pointer->moveAbsolute(hover_point.x, hover_point.y, source, tablet_data);
   }
@@ -1875,11 +2176,35 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   }
 }
 
-- (void)pencilInteractionDidTap:(UIPencilInteraction *)interaction
+/* Double tap on Apple Pencil 2 and Pro. The first one asks what it should do. */
+- (void)pencilInteraction:(UIPencilInteraction *)interaction
+            didReceiveTap:(UIPencilInteractionTap *)tap
 {
   (void)interaction;
-  virtual_pointer->setSource(GHOST_IOSPointerSource::Pencil);
-  virtual_pointer->click(GHOST_kButtonMaskRight, tablet_data);
+  if (GHOST_IOSPencilPalette_isVisible(pencil_palette)) {
+    GHOST_IOSPencilPalette_hide(pencil_palette);
+    return;
+  }
+  const GHOST_IOSPencilAction action = GHOST_IOSPencil_doubleTapAction(
+      touch_settings.double_tap, GHOST_IOSPencil_systemTapAction());
+  [self runPencilAction:action at:[self pencilInteractionPoint:tap.hoverPose]];
+}
+
+/* Squeeze on Apple Pencil Pro. Opens on release, under the tip when it hovers. */
+- (void)pencilInteraction:(UIPencilInteraction *)interaction
+        didReceiveSqueeze:(UIPencilInteractionSqueeze *)squeeze
+{
+  (void)interaction;
+  if (squeeze.phase != UIPencilInteractionPhaseEnded) {
+    return;
+  }
+  if (GHOST_IOSPencilPalette_isVisible(pencil_palette)) {
+    GHOST_IOSPencilPalette_hide(pencil_palette);
+    return;
+  }
+  const GHOST_IOSPencilAction action = GHOST_IOSPencil_squeezeAction(
+      touch_settings.squeeze, GHOST_IOSPencil_systemSqueezeAction());
+  [self runPencilAction:action at:[self pencilInteractionPoint:squeeze.hoverPose]];
 }
 
 - (void)beginFrame
@@ -3067,3 +3392,32 @@ void GHOST_WindowIOS::endIME()
   /* Passthrough for iOS. */
 }
 #endif /* WITH_INPUT_IME */
+
+/* -------------------------------------------------------------------- */
+/** \name Window manager channel
+ * \{ */
+
+static GHOSTUIWindow *GHOST_IOS_rootWindow(void *ghost_window)
+{
+  if (ghost_window == nullptr) {
+    return nil;
+  }
+  /* iOS builds only create #GHOST_WindowIOS windows. */
+  GHOST_WindowIOS *window = static_cast<GHOST_WindowIOS *>(
+      static_cast<GHOST_IWindow *>(ghost_window));
+  return (GHOSTUIWindow *)window->rootWindow;
+}
+
+void GHOST_IOS_SetInteractionContext(void *ghost_window,
+                                     const GHOST_IOSInteractionContext &context)
+{
+  [GHOST_IOS_rootWindow(ghost_window) setInteractionContext:context];
+}
+
+bool GHOST_IOS_TakeCommand(void *ghost_window, char command[GHOST_IOS_COMMAND_MAX])
+{
+  GHOSTUIWindow *root_window = GHOST_IOS_rootWindow(ghost_window);
+  return root_window != nil && [root_window takeCommand:command];
+}
+
+/** \} */

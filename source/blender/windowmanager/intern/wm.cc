@@ -602,6 +602,10 @@ void WM_main_entry(bContext *C)
   wm_event_do_refresh_wm_and_depsgraph(C);
 }
 
+#ifdef BLENDER_PLATFORM_MAIN_LOOP_HOOK
+void BLENDER_PLATFORM_MAIN_LOOP_HOOK(bContext *C);
+#endif
+
 void WM_main_loop_body(bContext *C)
 {
   PRF_scope(ProfileCategory::Core);
@@ -611,6 +615,10 @@ void WM_main_loop_body(bContext *C)
 
   /* Per window, all events to the window, screen, area and region handlers. */
   wm_event_do_handlers(C);
+
+#ifdef BLENDER_PLATFORM_MAIN_LOOP_HOOK
+  BLENDER_PLATFORM_MAIN_LOOP_HOOK(C);
+#endif
 
   /* Events have left notes about changes, we handle and cache it. */
   wm_event_do_notifiers(C);

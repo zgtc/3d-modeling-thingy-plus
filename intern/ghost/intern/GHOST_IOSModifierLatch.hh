@@ -4,7 +4,7 @@
 
 /** \file
  * \ingroup GHOST
- * Platform-neutral state for the on-screen Shift, Ctrl and Alt keys.
+ * Platform-neutral state for the on-screen Shift, Ctrl, Alt and Cmd keys.
  */
 
 #pragma once
@@ -15,9 +15,11 @@ enum class GHOST_IOSModifier : uint8_t {
   Shift,
   Control,
   Alt,
+  /** Cmd on Apple keyboards. */
+  OS,
 };
 
-constexpr int GHOST_IOS_MODIFIER_COUNT = 3;
+constexpr int GHOST_IOS_MODIFIER_COUNT = 4;
 
 enum class GHOST_IOSModifierMode : uint8_t {
   /** Not applied. */
@@ -98,6 +100,17 @@ class GHOST_IOSModifierLatch {
     if (key.mode != GHOST_IOSModifierMode::Locked) {
       key.mode = GHOST_IOSModifierMode::Off;
     }
+  }
+
+  /**
+   * Lock the key, or turn a locked key off, without a touch on it. Used by native controls
+   * such as the Pencil palette's Invert slot.
+   */
+  void toggleLock(const GHOST_IOSModifier modifier)
+  {
+    Key &key = key_(modifier);
+    key.mode = key.mode == GHOST_IOSModifierMode::Locked ? GHOST_IOSModifierMode::Off :
+                                                           GHOST_IOSModifierMode::Locked;
   }
 
   /** Call before a pointer button press reaches Blender. */

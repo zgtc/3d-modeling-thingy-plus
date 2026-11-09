@@ -4,18 +4,21 @@
 
 /** \file
  * \ingroup GHOST
- * Native on-screen Shift, Ctrl and Alt keys for touch and Apple Pencil.
+ * Native on-screen command bar for touch and Apple Pencil: Shift, Ctrl, Alt and Cmd, shortcut
+ * keys for the editor under the pointer, and a key pad for typed transform values.
  */
 
 #pragma once
 
 #include "GHOST_IOSModifierLatch.hh"
+#include "GHOST_IOSTouchKeys.hh"
 
 #ifdef __OBJC__
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
 
+@class UIMenu;
 @class UIView;
 
 /** Receives touches on the belt's keys. Timestamps are `UITouch.timestamp` seconds. */
@@ -26,11 +29,14 @@
 - (void)modifierBeltKeyCancelled:(GHOST_IOSModifier)modifier;
 /** The belt was hidden, for example because a hardware keyboard connected. */
 - (void)modifierBeltDidHide;
+/** A shortcut or key pad key was tapped. */
+- (void)commandBarKey:(GHOST_IOSKeyStroke)stroke;
 @end
 
 /**
- * Add the belt to \a input_view. It starts collapsed to a small handle in the corner the user
- * last chose. The delegate is not retained.
+ * Add the bar to \a input_view. It docks vertically to the left or right edge, in the top or
+ * bottom half the user last chose, and starts collapsed to a small handle. The delegate is not
+ * retained.
  */
 NSObject *GHOST_IOSModifierBelt_create(UIView *input_view,
                                        id<GHOSTIOSModifierBeltDelegate> delegate);
@@ -44,5 +50,11 @@ void GHOST_IOSModifierBelt_setModes(NSObject *belt,
  * visible. \a point is in \a input_view points.
  */
 void GHOST_IOSModifierBelt_setCursor(NSObject *belt, CGPoint point, bool visible);
+/** Show \a count shortcut keys below the modifiers. The keys are copied. */
+void GHOST_IOSModifierBelt_setContextKeys(NSObject *belt, const GHOST_IOSBarKey *keys, int count);
+/** Show the transform key pad next to the bar, while a modal operator takes typed values. */
+void GHOST_IOSModifierBelt_setKeyPadVisible(NSObject *belt, bool visible);
+/** The menu behind the bar's settings button. */
+void GHOST_IOSModifierBelt_setSettingsMenu(NSObject *belt, UIMenu *menu);
 
 #endif
