@@ -58,6 +58,27 @@ struct GHOST_IOSResizeEdge {
   }
 };
 
+/** Keyboard shortcuts of a running modal tool, for the quick bar. */
+constexpr int GHOST_IOS_MODAL_KEY_MAX = 6;
+constexpr uint8_t GHOST_IOS_MODAL_KEY_SHIFT = 1 << 0;
+constexpr uint8_t GHOST_IOS_MODAL_KEY_CTRL = 1 << 1;
+constexpr uint8_t GHOST_IOS_MODAL_KEY_ALT = 1 << 2;
+constexpr uint8_t GHOST_IOS_MODAL_KEY_OS = 1 << 3;
+
+struct GHOST_IOSModalKey {
+  char title[24] = "";
+  /** A #GHOST_TKey. */
+  int key = 0;
+  /** #GHOST_IOS_MODAL_KEY_SHIFT and friends. */
+  uint8_t modifiers = 0;
+
+  bool operator==(const GHOST_IOSModalKey &other) const
+  {
+    return key == other.key && modifiers == other.modifiers &&
+           std::strcmp(title, other.title) == 0;
+  }
+};
+
 struct GHOST_IOSInteractionContext {
   GHOST_IOSEditor editor = GHOST_IOSEditor::Other;
   GHOST_IOSMode mode = GHOST_IOSMode::Object;
@@ -82,6 +103,25 @@ struct GHOST_IOSInteractionContext {
   int timeline_right = 0;
   int timeline_header_top = 0;
   int timeline_header_bottom = 0;
+  /**
+   * Keyboard shortcuts of the running modal tool, from its modal keymap, in the order its status
+   * line lists them. Mouse buttons are left out. The quick bar shows these while the tool runs.
+   */
+  GHOST_IOSModalKey modal_keys[GHOST_IOS_MODAL_KEY_MAX];
+  int modal_keys_num = 0;
+
+  bool sameModalKeys(const GHOST_IOSInteractionContext &other) const
+  {
+    if (modal_keys_num != other.modal_keys_num) {
+      return false;
+    }
+    for (int i = 0; i < modal_keys_num; i++) {
+      if (!(modal_keys[i] == other.modal_keys[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   bool operator==(const GHOST_IOSInteractionContext &other) const
   {
@@ -92,7 +132,7 @@ struct GHOST_IOSInteractionContext {
            sameWorkspaces(other) && has_timeline == other.has_timeline &&
            timeline_right == other.timeline_right &&
            timeline_header_top == other.timeline_header_top &&
-           timeline_header_bottom == other.timeline_header_bottom;
+           timeline_header_bottom == other.timeline_header_bottom && sameModalKeys(other);
   }
   bool sameWorkspaces(const GHOST_IOSInteractionContext &other) const
   {

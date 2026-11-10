@@ -41,6 +41,7 @@
 #include "GHOST_IOSInteraction.hh"
 
 #include "wm_event_system.hh"
+#include "wm_ios_status_keys.hh"
 #include "wm_window.hh"
 
 namespace blender {
@@ -324,7 +325,66 @@ static void wm_ios_resize_edges(wmWindow &win, bScreen &screen, GHOST_IOSInterac
   }
 }
 
-static GHOST_IOSInteractionContext wm_ios_interaction_context(const Main &bmain, wmWindow &win)
+/**
+ * The keyboard shortcuts of the innermost modal tool that has a modal keymap, in the order its
+ * status line lists them, for the quick bar. Mouse bindings are left out: on a touch screen they
+ * are of no use, and the status line drops them too.
+ */
+static void wm_ios_modal_keys(wmWindowManager &wm,
+                              wmWindow &win,
+                              GHOST_IOSInteractionContext &context)
+{
+  wmOperator *op = nullptr;
+  wmKeyMap *keymap = nullptr;
+  for (wmEventHandler &handler_base : win.runtime->modalhandlers) {
+    if (handler_base.type != WM_HANDLER_TYPE_OP) {
+      continue;
+    }
+    wmEventHandler_Op &handler = reinterpret_cast<wmEventHandler_Op &>(handler_base);
+    if (handler.op == nullptr) {
+      continue;
+    }
+    wmOperator *op_test = handler.op->opm ? handler.op->opm : handler.op;
+    wmKeyMap *keymap_test = WM_keymap_active(&wm, op_test->type->modalkeymap);
+    if (keymap_test && keymap_test->modal_items) {
+      op = op_test;
+      keymap = keymap_test;
+      break;
+    }
+  }
+  if (keymap == nullptr) {
+    return;
+  }
+  const EnumPropertyItem *items = static_cast<const EnumPropertyItem *>(keymap->modal_items);
+  for (int i = 0; items[i].identifier && context.modal_keys_num < GHOST_IOS_MODAL_KEY_MAX; i++) {
+    if (items[i].identifier[0] == '\0') {
+      continue;
+    }
+    if (keymap->poll_modal_item && !keymap->poll_modal_item(op, items[i].value)) {
+      continue;
+    }
+    for (const wmKeyMapItem &kmi : keymap->items) {
+      if (kmi.propvalue != items[i].value || (kmi.flag & KMI_INACTIVE) || kmi.val == KM_RELEASE)
+      {
+        continue;
+      }
+      if (wm_ios_modal_key_add(context,
+                               IFACE_(items[i].name),
+                               kmi.type,
+                               kmi.shift == KM_MOD_HELD,
+                               kmi.ctrl == KM_MOD_HELD,
+                               kmi.alt == KM_MOD_HELD,
+                               kmi.oskey == KM_MOD_HELD))
+      {
+        break;
+      }
+    }
+  }
+}
+
+static GHOST_IOSInteractionContext wm_ios_interaction_context(wmWindowManager &wm,
+                                                              const Main &bmain,
+                                                              wmWindow &win)
 {
   GHOST_IOSInteractionContext context;
   const wmEvent *eventstate = win.runtime->eventstate;
@@ -344,6 +404,7 @@ static GHOST_IOSInteractionContext wm_ios_interaction_context(const Main &bmain,
       break;
     }
   }
+  wm_ios_modal_keys(wm, win, context);
 
   ScrArea *area = BKE_screen_find_area_xy(screen, SPACE_TYPE_ANY, eventstate->xy);
   if (area == nullptr) {
@@ -659,7 +720,7 @@ void wm_ios_touch_channel_update(bContext *C)
     if (wm_ios_native_chrome) {
       wm_ios_hide_topbar(win);
     }
-    GHOST_IOS_SetInteractionContext(ghost_window, wm_ios_interaction_context(*bmain, win));
+    GHOST_IOS_SetInteractionContext(ghost_window, wm_ios_interaction_context(*wm, *bmain, win));
   }
 }
 

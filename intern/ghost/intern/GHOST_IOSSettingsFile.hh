@@ -17,6 +17,7 @@
 #include "GHOST_IOSPencilSettings.hh"
 #include "GHOST_IOSTouchKeys.hh"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -740,6 +741,19 @@ struct GHOST_IOSCustomBar {
 
   void build(const GHOST_IOSInteractionContext &context, const GHOST_IOSSettingsFile &file)
   {
+    /* A running tool's own shortcuts take the place of the mode's keys until it finishes. */
+    if (context.modal_keys_num > 0) {
+      std::snprintf(set, sizeof(set), "%s", "modal");
+      count = std::min(context.modal_keys_num, GHOST_IOS_BAR_KEY_MAX);
+      for (int i = 0; i < count; i++) {
+        const GHOST_IOSModalKey &modal = context.modal_keys[i];
+        std::snprintf(labels[i], sizeof(labels[i]), "%s", modal.title);
+        keys[i].title = labels[i];
+        keys[i].stroke = {GHOST_TKey(modal.key), modal.modifiers, nullptr};
+        keys[i].command = nullptr;
+      }
+      return;
+    }
     std::snprintf(set, sizeof(set), "%s", GHOST_IOSCommandBar_setName(context));
     const GHOST_IOSBarKey *defaults = GHOST_IOSCommandBar_keys(context, &count);
     for (int i = 0; i < count; i++) {

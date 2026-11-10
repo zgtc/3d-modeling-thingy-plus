@@ -264,6 +264,14 @@ static bool uiTemplateInputStatus3DView(bContext *C, Layout *row)
   return false;
 }
 
+#ifdef BLENDER_PLATFORM_TOUCH_STATUS
+/** Mouse-button hints are of no use on a touch screen, where the quick bar shows the keys. */
+static bool status_icon_is_mouse(const int icon)
+{
+  return icon >= ICON_MOUSE_LMB && icon <= ICON_MOUSE_RMB_DRAG;
+}
+#endif
+
 void uiTemplateInputStatus(Layout *layout, bContext *C)
 {
   wmWindow *win = CTX_wm_window(C);
@@ -272,7 +280,28 @@ void uiTemplateInputStatus(Layout *layout, bContext *C)
   /* Workspace status text has priority. */
   if (!workspace->runtime->status.is_empty()) {
     Layout &row = layout->row(true);
+#ifdef BLENDER_PLATFORM_TOUCH_STATUS
+    /* Drop each mouse hint with its label: the icons come first, then the text. */
+    bool skip_mouse_hint = false;
+#endif
     for (const bke::WorkSpaceStatusItem &item : workspace->runtime->status) {
+#ifdef BLENDER_PLATFORM_TOUCH_STATUS
+      if (status_icon_is_mouse(item.icon)) {
+        skip_mouse_hint = true;
+        continue;
+      }
+      if (skip_mouse_hint) {
+        if (item.icon == ICON_NONE && item.space_factor == 0.0f) {
+          skip_mouse_hint = false;
+          continue;
+        }
+        if (item.space_factor == 0.0f) {
+          /* A second icon of the same hint, such as a modifier key: drop it too. */
+          continue;
+        }
+        skip_mouse_hint = false;
+      }
+#endif
       if (item.space_factor != 0.0f) {
         row.separator(item.space_factor);
       }
@@ -293,6 +322,11 @@ void uiTemplateInputStatus(Layout *layout, bContext *C)
   if (WM_window_modal_keymap_status_draw(C, win, *layout)) {
     return;
   }
+
+  /* Everything below describes what the mouse buttons do where the pointer is. */
+#ifdef BLENDER_PLATFORM_TOUCH_STATUS
+  return;
+#endif
 
   bScreen *screen = CTX_wm_screen(C);
   ARegion *region = screen->active_region;

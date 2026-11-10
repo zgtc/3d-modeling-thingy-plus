@@ -26,6 +26,13 @@ enum : uint8_t {
   GHOST_IOS_STROKE_OS = 1 << 3,
 };
 
+/* Running-tool keys from Blender carry their modifiers with the same bits. */
+static_assert(int(GHOST_IOS_STROKE_SHIFT) == int(GHOST_IOS_MODAL_KEY_SHIFT) &&
+                  int(GHOST_IOS_STROKE_CTRL) == int(GHOST_IOS_MODAL_KEY_CTRL) &&
+                  int(GHOST_IOS_STROKE_ALT) == int(GHOST_IOS_MODAL_KEY_ALT) &&
+                  int(GHOST_IOS_STROKE_OS) == int(GHOST_IOS_MODAL_KEY_OS),
+              "modifier bits must match");
+
 struct GHOST_IOSKeyStroke {
   GHOST_TKey key;
   /** #GHOST_IOS_STROKE_SHIFT and friends. */

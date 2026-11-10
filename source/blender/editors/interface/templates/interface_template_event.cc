@@ -49,6 +49,12 @@ int template_status_bar_modal_item(Layout *layout,
   if (kmi == nullptr) {
     return 0;
   }
+#ifdef BLENDER_PLATFORM_TOUCH_STATUS
+  /* Mouse bindings are of no use on a touch screen; the quick bar shows the keyboard ones. */
+  if (ISMOUSE(kmi->type) || ISMOUSE_BUTTON(kmi->type)) {
+    return 1;
+  }
+#endif
 
   if ((kmi->val == KM_RELEASE) && ISKEYBOARD(kmi->type)) {
     /* Assume release events just disable something which was toggled on. */
