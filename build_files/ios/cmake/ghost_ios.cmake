@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 list(APPEND SRC
+  GHOST_IOSInteraction.hh
   intern/GHOST_ContextIOS.hh
   intern/GHOST_ContextIOS.mm
   intern/GHOST_EventTouch.hh
@@ -13,10 +14,14 @@ list(APPEND SRC
   intern/GHOST_IOSModifierBelt.mm
   intern/GHOST_IOSModifierLatch.hh
   intern/GHOST_IOSPencilContact.hh
+  intern/GHOST_IOSPencilPalette.hh
+  intern/GHOST_IOSPencilPalette.mm
+  intern/GHOST_IOSPencilSettings.hh
   intern/GHOST_IOSSettingsLocation.hh
   intern/GHOST_IOSSettingsLocation.mm
   intern/GHOST_IOSStyle.hh
   intern/GHOST_IOSStyle.mm
+  intern/GHOST_IOSTouchKeys.hh
   intern/GHOST_IOSVirtualPointer.hh
   intern/GHOST_IOSVirtualPointer.mm
   intern/GHOST_IOSVirtualPointerState.hh

@@ -4,11 +4,17 @@
 
 /** \file
  * \ingroup GHOST
- * Native on-screen Shift, Ctrl and Alt keys for touch and Apple Pencil.
+ * Native on-screen command bar for touch and Apple Pencil.
  *
- * The belt is a small handle that can be dragged to any corner of the screen. Tapping it shows
- * the keys. Each key can be held like a hardware key, tapped to apply to the next click, or double
- * tapped to stay on. The key logic lives in #GHOST_IOSModifierLatch; this file is only the view.
+ * The bar stays open on the left or right screen edge, beside Blender's canvas, which is inset so
+ * the bar never covers it. From the handle it shows Shift, Ctrl, Alt and Cmd, then up to six
+ * shortcut keys for the editor and mode under the pointer, then a settings button. Drag the handle
+ * to another corner, or tap it to switch sides. While a modal operator takes typed values, a key
+ * pad with axes and numbers shows next to the bar, so `G Z 2 Enter` works without a keyboard.
+ *
+ * Each modifier can be held like a hardware key, tapped to apply to the next click, or double
+ * tapped to stay on. The key logic lives in #GHOST_IOSModifierLatch and the key sets in
+ * #GHOST_IOSTouchKeys.hh; this file is only the view.
  */
 
 #import <GameController/GameController.h>
@@ -18,6 +24,7 @@
 #include "GHOST_IOSModifierBelt.hh"
 #include "GHOST_IOSStyle.hh"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -31,10 +38,15 @@ enum {
 
 static NSString *const GHOST_IOSModifierBeltCorner = @"GHOST_IOSModifierBeltCorner";
 
-static constexpr CGFloat belt_height = 52.0f;
 static constexpr CGFloat belt_padding = 4.0f;
 static constexpr CGFloat handle_size = GHOST_IOS_CONTROL_SIZE;
 static constexpr CGFloat key_width = 58.0f;
+/** The bar is vertical: one key wide. */
+static constexpr CGFloat belt_width = key_width + belt_padding * 2.0f;
+static constexpr CGFloat command_key_height = 36.0f;
+static constexpr CGFloat pad_key_width = 52.0f;
+static constexpr CGFloat pad_key_height = 40.0f;
+static constexpr CGFloat pad_gap = 8.0f;
 static constexpr CGFloat edge_inset = 12.0f;
 /** Keep the bottom corners clear of Blender's status bar. */
 static constexpr CGFloat bottom_inset = 40.0f;
@@ -52,6 +64,7 @@ static const GHOST_IOSModifierKeyInfo GHOST_IOS_MODIFIER_KEYS[GHOST_IOS_MODIFIER
     {GHOST_IOSModifier::Shift, @"shift", @"Shift", @"blender_modifier_shift"},
     {GHOST_IOSModifier::Control, @"control", @"Ctrl", @"blender_modifier_control"},
     {GHOST_IOSModifier::Alt, @"option", @"Alt", @"blender_modifier_alt"},
+    {GHOST_IOSModifier::OS, @"command", @"Cmd", @"blender_modifier_os"},
 };
 
 static os_log_t GHOST_IOSModifierBeltLog()
@@ -256,6 +269,81 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
 /** \} */
 
 /* -------------------------------------------------------------------- */
+/** \name Shortcut and key pad keys
+ * \{ */
+
+static UIColor *GHOST_IOSCommandKeyIdleColor()
+{
+  return [UIColor colorWithWhite:1.0f alpha:GHOST_IOSStyle_hasGlass() ? 0.06f : 0.10f];
+}
+
+/** A key that sends one key stroke when tapped. */
+@interface GHOSTIOSCommandKeyButton : UIButton {
+  GHOST_IOSKeyStroke stroke_;
+  id<GHOSTIOSModifierBeltDelegate> delegate_;
+}
++ (instancetype)keyWithInfo:(const GHOST_IOSBarKey &)info
+                   delegate:(id<GHOSTIOSModifierBeltDelegate>)delegate
+                      width:(CGFloat)width
+                     height:(CGFloat)height
+                 identifier:(NSString *)identifier;
+- (void)forgetDelegate;
+@end
+
+@implementation GHOSTIOSCommandKeyButton
+
++ (instancetype)keyWithInfo:(const GHOST_IOSBarKey &)info
+                   delegate:(id<GHOSTIOSModifierBeltDelegate>)delegate
+                      width:(CGFloat)width
+                     height:(CGFloat)height
+                 identifier:(NSString *)identifier
+{
+  GHOSTIOSCommandKeyButton *key = [self buttonWithType:UIButtonTypeCustom];
+  key->stroke_ = info.stroke;
+  key->delegate_ = delegate;
+  NSString *title = [NSString stringWithUTF8String:info.title];
+  key.translatesAutoresizingMaskIntoConstraints = NO;
+  [key setTitle:title forState:UIControlStateNormal];
+  [key setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+  key.titleLabel.font = [UIFont systemFontOfSize:13.0f weight:UIFontWeightSemibold];
+  key.titleLabel.adjustsFontSizeToFitWidth = YES;
+  key.titleLabel.minimumScaleFactor = 0.7f;
+  key.backgroundColor = GHOST_IOSCommandKeyIdleColor();
+  key.layer.cornerRadius = height * 0.5f;
+  key.layer.cornerCurve = kCACornerCurveContinuous;
+  key.accessibilityLabel = title;
+  key.accessibilityIdentifier = identifier;
+  [NSLayoutConstraint activateConstraints:@[
+    [key.widthAnchor constraintEqualToConstant:width],
+    [key.heightAnchor constraintEqualToConstant:height],
+  ]];
+  [key addTarget:key action:@selector(handlePress) forControlEvents:UIControlEventTouchUpInside];
+  return key;
+}
+
+- (void)setHighlighted:(BOOL)highlighted
+{
+  [super setHighlighted:highlighted];
+  self.backgroundColor = highlighted ? GHOST_IOSStyle_accentColor() :
+                                       GHOST_IOSCommandKeyIdleColor();
+}
+
+- (void)handlePress
+{
+  GHOST_IOSStyle_selectionFeedback();
+  [delegate_ commandBarKey:stroke_];
+}
+
+- (void)forgetDelegate
+{
+  delegate_ = nil;
+}
+
+@end
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
 /** \name Belt
  * \{ */
 
@@ -266,9 +354,20 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   UIView *handle_;
   UIImageView *handle_icon_;
   NSArray<GHOSTIOSModifierKeyView *> *keys_;
+  NSMutableArray<GHOSTIOSCommandKeyButton *> *context_keys_;
+  GHOST_IOSBarKey context_key_info_[GHOST_IOS_BAR_KEY_MAX];
+  int context_key_count_;
+  UIView *separator_;
+  UIButton *settings_button_;
+  /** Sibling of the bar in the input view, so it can sit beside the bar. */
+  UIView *key_pad_;
+  NSMutableArray<GHOSTIOSCommandKeyButton *> *key_pad_keys_;
+  BOOL key_pad_wanted_;
   NSArray<NSLayoutConstraint *> *corner_constraints_;
   UIPanGestureRecognizer *pan_;
   UITapGestureRecognizer *tap_;
+  /** Blender's canvas. Not retained. */
+  UIView *input_view_;
   id keyboard_connect_observer_;
   id keyboard_disconnect_observer_;
   NSInteger corner_;
@@ -281,6 +380,10 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
 - (void)teardown;
 - (void)setModes:(const GHOST_IOSModifierMode *)modes;
 - (void)setCursor:(CGPoint)point visible:(bool)visible;
+- (void)setContextKeys:(const GHOST_IOSBarKey *)keys count:(int)count;
+- (void)setKeyPadVisible:(BOOL)visible;
+- (void)setSettingsMenu:(UIMenu *)menu;
+- (BOOL)containsView:(UIView *)view;
 @end
 
 @implementation GHOSTIOSModifierBeltView
@@ -293,8 +396,14 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
     return nil;
   }
   delegate_ = delegate;
-  expanded_ = NO;
+  input_view_ = input_view;
+  /* Pinned open: a tucked-away bar was hard to find and slow to reach. */
+  expanded_ = YES;
   cursor_over_ = NO;
+  context_key_count_ = 0;
+  key_pad_wanted_ = NO;
+  context_keys_ = [[NSMutableArray alloc] init];
+  key_pad_keys_ = [[NSMutableArray alloc] init];
   for (GHOST_IOSModifierMode &mode : modes_) {
     mode = GHOST_IOSModifierMode::Off;
   }
@@ -317,7 +426,7 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
     self.layer.shadowOffset = CGSizeMake(0.0f, 2.0f);
   }
 
-  background_ = GHOST_IOSStyle_createMaterialView(belt_height * 0.5f);
+  background_ = GHOST_IOSStyle_createMaterialView(belt_width * 0.5f);
   [self addSubview:background_];
 
   handle_ = [[UIView alloc] init];
@@ -327,7 +436,7 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   handle_.isAccessibilityElement = YES;
   handle_.accessibilityTraits = UIAccessibilityTraitButton;
   handle_.accessibilityLabel = @"Modifier keys";
-  handle_.accessibilityHint = @"Tap to show Shift, Ctrl and Alt. Drag to move to another corner.";
+  handle_.accessibilityHint = @"Tap to switch sides. Drag to move to another corner.";
   handle_.accessibilityIdentifier = @"blender_modifier_belt_handle";
   handle_icon_ = [[UIImageView alloc] init];
   handle_icon_.translatesAutoresizingMaskIntoConstraints = NO;
@@ -340,14 +449,29 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
     GHOSTIOSModifierKeyView *key = [[[GHOSTIOSModifierKeyView alloc] initWithKey:info
                                                                          delegate:delegate]
         autorelease];
-    key.hidden = YES;
+    key.hidden = !expanded_;
     [keys addObject:key];
   }
   keys_ = [keys copy];
 
+  separator_ = [[UIView alloc] init];
+  separator_.translatesAutoresizingMaskIntoConstraints = NO;
+  separator_.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.25f];
+  separator_.hidden = !expanded_;
+
+  settings_button_ = [[UIButton buttonWithType:UIButtonTypeSystem] retain];
+  settings_button_.translatesAutoresizingMaskIntoConstraints = NO;
+  [settings_button_ setImage:GHOST_IOSModifierSymbol(@"gearshape", 17.0f)
+                    forState:UIControlStateNormal];
+  settings_button_.tintColor = UIColor.whiteColor;
+  settings_button_.showsMenuAsPrimaryAction = YES;
+  settings_button_.accessibilityLabel = @"Touch and Pencil settings";
+  settings_button_.accessibilityIdentifier = @"blender_command_bar_settings";
+  settings_button_.hidden = !expanded_;
+
   stack_ = [[UIStackView alloc] init];
   stack_.translatesAutoresizingMaskIntoConstraints = NO;
-  stack_.axis = UILayoutConstraintAxisHorizontal;
+  stack_.axis = UILayoutConstraintAxisVertical;
   stack_.alignment = UIStackViewAlignmentCenter;
   stack_.spacing = belt_padding;
   [self addSubview:stack_];
@@ -357,10 +481,14 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
     [background_.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
     [background_.topAnchor constraintEqualToAnchor:self.topAnchor],
     [background_.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-    [stack_.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:belt_padding],
-    [stack_.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-belt_padding],
-    [stack_.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-    [self.heightAnchor constraintEqualToConstant:belt_height],
+    [stack_.topAnchor constraintEqualToAnchor:self.topAnchor constant:belt_padding],
+    [stack_.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-belt_padding],
+    [stack_.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+    [self.widthAnchor constraintEqualToConstant:belt_width],
+    [separator_.widthAnchor constraintEqualToConstant:28.0f],
+    [separator_.heightAnchor constraintEqualToConstant:1.0f],
+    [settings_button_.widthAnchor constraintEqualToConstant:key_width],
+    [settings_button_.heightAnchor constraintEqualToConstant:command_key_height],
     [handle_.widthAnchor constraintEqualToConstant:handle_size],
     [handle_.heightAnchor constraintEqualToConstant:handle_size],
     [handle_icon_.centerXAnchor constraintEqualToAnchor:handle_.centerXAnchor],
@@ -373,7 +501,8 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   [handle_ addGestureRecognizer:tap_];
   [handle_ addGestureRecognizer:pan_];
 
-  [input_view addSubview:self];
+  [[self hostView] addSubview:self];
+  [self createKeyPadInView:input_view];
   [self arrangeForCorner];
   [self activateCornerConstraints];
   [self updateHandle];
@@ -410,7 +539,17 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   }
   [handle_ removeGestureRecognizer:tap_];
   [handle_ removeGestureRecognizer:pan_];
+  if (id<GHOSTIOSCanvasInsetting> host = [self insettingHost]) {
+    [host setCanvasInsetsLeading:0.0f trailing:0.0f];
+  }
+  for (GHOSTIOSCommandKeyButton *key in context_keys_) {
+    [key forgetDelegate];
+  }
+  for (GHOSTIOSCommandKeyButton *key in key_pad_keys_) {
+    [key forgetDelegate];
+  }
   delegate_ = nil;
+  [key_pad_ removeFromSuperview];
   [self removeFromSuperview];
 }
 
@@ -421,10 +560,42 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   [handle_ release];
   [handle_icon_ release];
   [keys_ release];
+  [context_keys_ release];
+  [separator_ release];
+  [settings_button_ release];
+  [key_pad_ release];
+  [key_pad_keys_ release];
   [corner_constraints_ release];
   [pan_ release];
   [tap_ release];
   [super dealloc];
+}
+
+/** The canvas' superview when it can make room for the bar. */
+- (id<GHOSTIOSCanvasInsetting>)insettingHost
+{
+  UIView *host = input_view_.superview;
+  if ([host conformsToProtocol:@protocol(GHOSTIOSCanvasInsetting)]) {
+    return (id<GHOSTIOSCanvasInsetting>)host;
+  }
+  return nil;
+}
+
+- (UIView *)hostView
+{
+  return [self insettingHost] != nil ? input_view_.superview : input_view_;
+}
+
+- (void)updateCanvasInsets
+{
+  id<GHOSTIOSCanvasInsetting> host = [self insettingHost];
+  if (host == nil) {
+    return;
+  }
+  double leading = 0.0, trailing = 0.0;
+  GHOST_IOSCommandBar_canvasInsets(
+      !self.hidden, [self isLeftCorner], belt_width, edge_inset, &leading, &trailing);
+  [host setCanvasInsetsLeading:leading trailing:trailing];
 }
 
 - (BOOL)isLeftCorner
@@ -437,21 +608,29 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   return corner_ == GHOST_IOS_BELT_TOP_LEFT || corner_ == GHOST_IOS_BELT_TOP_RIGHT;
 }
 
-/** Keep the handle against the screen edge so the keys open towards the middle. */
+/** Everything the handle shows and hides. */
+- (NSArray<UIView *> *)expandableViews
+{
+  NSMutableArray<UIView *> *views = [NSMutableArray arrayWithArray:keys_];
+  [views addObject:separator_];
+  [views addObjectsFromArray:context_keys_];
+  [views addObject:settings_button_];
+  return views;
+}
+
+/** Keep the handle in the corner so the keys open towards the middle of the edge. */
 - (void)arrangeForCorner
 {
   for (UIView *view in [[stack_.arrangedSubviews copy] autorelease]) {
     [stack_ removeArrangedSubview:view];
     [view removeFromSuperview];
   }
-  if ([self isLeftCorner]) {
-    [stack_ addArrangedSubview:handle_];
-  }
-  for (GHOSTIOSModifierKeyView *key in keys_) {
-    [stack_ addArrangedSubview:key];
-  }
-  if (![self isLeftCorner]) {
-    [stack_ addArrangedSubview:handle_];
+  NSMutableArray<UIView *> *order = [NSMutableArray arrayWithObject:handle_];
+  [order addObjectsFromArray:[self expandableViews]];
+  NSEnumerator<UIView *> *views = [self isTopCorner] ? order.objectEnumerator :
+                                                       order.reverseObjectEnumerator;
+  for (UIView *view in views) {
+    [stack_ addArrangedSubview:view];
   }
 }
 
@@ -477,18 +656,90 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
           [self.topAnchor constraintEqualToAnchor:safe_area.topAnchor constant:edge_inset] :
           [self.bottomAnchor constraintEqualToAnchor:safe_area.bottomAnchor
                                             constant:-bottom_inset];
-  corner_constraints_ = [@[ horizontal, vertical ] retain];
+  /* The key pad opens towards the middle of the screen, level with the bar's handle end. */
+  NSLayoutConstraint *pad_horizontal =
+      [self isLeftCorner] ?
+          [key_pad_.leadingAnchor constraintEqualToAnchor:self.trailingAnchor constant:pad_gap] :
+          [key_pad_.trailingAnchor constraintEqualToAnchor:self.leadingAnchor constant:-pad_gap];
+  NSLayoutConstraint *pad_vertical =
+      [self isTopCorner] ? [key_pad_.topAnchor constraintEqualToAnchor:self.topAnchor] :
+                           [key_pad_.bottomAnchor constraintEqualToAnchor:self.bottomAnchor];
+  corner_constraints_ = [@[ horizontal, vertical, pad_horizontal, pad_vertical ] retain];
   [NSLayoutConstraint activateConstraints:corner_constraints_];
+  [self updateCanvasInsets];
+}
+
+- (void)createKeyPadInView:(UIView *)input_view
+{
+  key_pad_ = [[UIView alloc] init];
+  key_pad_.translatesAutoresizingMaskIntoConstraints = NO;
+  key_pad_.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+  key_pad_.accessibilityIdentifier = @"blender_command_bar_key_pad";
+  key_pad_.hidden = YES;
+  UIVisualEffectView *background = GHOST_IOSStyle_createMaterialView(18.0f);
+  [key_pad_ addSubview:background];
+
+  UIStackView *rows = [[[UIStackView alloc] init] autorelease];
+  rows.translatesAutoresizingMaskIntoConstraints = NO;
+  rows.axis = UILayoutConstraintAxisVertical;
+  rows.spacing = belt_padding;
+  [key_pad_ addSubview:rows];
+
+  const int columns = GHOST_IOS_KEY_PAD_COLUMNS;
+  const int full_rows = GHOST_IOS_KEY_PAD_COUNT / columns;
+  for (int row = 0; row * columns < GHOST_IOS_KEY_PAD_COUNT; row++) {
+    UIStackView *line = [[[UIStackView alloc] init] autorelease];
+    line.axis = UILayoutConstraintAxisHorizontal;
+    line.spacing = belt_padding;
+    const int first = row * columns;
+    const int count = std::min(columns, GHOST_IOS_KEY_PAD_COUNT - first);
+    /* A short last row (Esc, Return) stretches its keys across the pad. */
+    const CGFloat width = row < full_rows ?
+                              pad_key_width :
+                              (pad_key_width * columns + belt_padding * (columns - count)) /
+                                  count;
+    for (int i = first; i < first + count; i++) {
+      NSString *identifier = [NSString stringWithFormat:@"blender_key_pad_%d", i];
+      GHOSTIOSCommandKeyButton *key = [GHOSTIOSCommandKeyButton keyWithInfo:GHOST_IOS_KEY_PAD[i]
+                                                                   delegate:delegate_
+                                                                      width:width
+                                                                     height:pad_key_height
+                                                                 identifier:identifier];
+      [key_pad_keys_ addObject:key];
+      [line addArrangedSubview:key];
+    }
+    [rows addArrangedSubview:line];
+  }
+
+  [input_view addSubview:key_pad_];
+  [NSLayoutConstraint activateConstraints:@[
+    [background.leadingAnchor constraintEqualToAnchor:key_pad_.leadingAnchor],
+    [background.trailingAnchor constraintEqualToAnchor:key_pad_.trailingAnchor],
+    [background.topAnchor constraintEqualToAnchor:key_pad_.topAnchor],
+    [background.bottomAnchor constraintEqualToAnchor:key_pad_.bottomAnchor],
+    [rows.leadingAnchor constraintEqualToAnchor:key_pad_.leadingAnchor constant:pad_gap],
+    [rows.trailingAnchor constraintEqualToAnchor:key_pad_.trailingAnchor constant:-pad_gap],
+    [rows.topAnchor constraintEqualToAnchor:key_pad_.topAnchor constant:pad_gap],
+    [rows.bottomAnchor constraintEqualToAnchor:key_pad_.bottomAnchor constant:-pad_gap],
+  ]];
+}
+
+- (void)updateKeyPadVisibility
+{
+  const BOOL hide = !key_pad_wanted_ || self.hidden;
+  if (key_pad_.hidden == hide) {
+    return;
+  }
+  key_pad_.hidden = hide;
+  [key_pad_.superview bringSubviewToFront:key_pad_];
 }
 
 - (void)updateHandle
 {
-  NSString *symbol = @"keyboard";
+  /* A grabber: the bar is always open, so the handle only moves it. */
+  NSString *symbol = @"line.3.horizontal";
   bool any_active = false;
-  if (expanded_) {
-    symbol = [self isLeftCorner] ? @"chevron.left" : @"chevron.right";
-  }
-  else {
+  if (!expanded_) {
     /* Show which key is on while the keys are tucked away. */
     for (const GHOST_IOSModifierKeyInfo &info : GHOST_IOS_MODIFIER_KEYS) {
       if (modes_[int(info.modifier)] != GHOST_IOSModifierMode::Off) {
@@ -503,40 +754,40 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
   handle_.accessibilityValue = expanded_ ? @"expanded" : @"collapsed";
 }
 
-- (void)setExpanded:(BOOL)expanded
+/** Tapping the handle moves the bar to the other side, keeping its half. */
+- (void)handleTap:(UITapGestureRecognizer *)sender
 {
-  if (expanded_ == expanded) {
+  if (sender.state != UIGestureRecognizerStateEnded) {
     return;
   }
-  expanded_ = expanded;
-  if (!expanded) {
-    /* A finger still on a key must not stay held once the key is gone. */
-    for (GHOSTIOSModifierKeyView *key in keys_) {
-      [key cancelTracking];
-    }
+  GHOST_IOSStyle_selectionFeedback();
+  switch (corner_) {
+    case GHOST_IOS_BELT_TOP_LEFT:
+      corner_ = GHOST_IOS_BELT_TOP_RIGHT;
+      break;
+    case GHOST_IOS_BELT_TOP_RIGHT:
+      corner_ = GHOST_IOS_BELT_TOP_LEFT;
+      break;
+    case GHOST_IOS_BELT_BOTTOM_LEFT:
+      corner_ = GHOST_IOS_BELT_BOTTOM_RIGHT;
+      break;
+    default:
+      corner_ = GHOST_IOS_BELT_BOTTOM_LEFT;
+      break;
   }
+  [NSUserDefaults.standardUserDefaults setInteger:corner_ forKey:GHOST_IOSModifierBeltCorner];
+  [self arrangeForCorner];
+  [self activateCornerConstraints];
+  [self updateHandle];
   [UIView animateWithDuration:0.25
                         delay:0.0
        usingSpringWithDamping:0.9f
         initialSpringVelocity:0.0f
                       options:UIViewAnimationOptionAllowUserInteraction
                    animations:^{
-                     for (GHOSTIOSModifierKeyView *key in keys_) {
-                       key.hidden = !expanded;
-                       key.alpha = expanded ? 1.0f : 0.0f;
-                     }
                      [self.superview layoutIfNeeded];
                    }
                    completion:nil];
-  [self updateHandle];
-}
-
-- (void)handleTap:(UITapGestureRecognizer *)sender
-{
-  if (sender.state == UIGestureRecognizerStateEnded) {
-    GHOST_IOSStyle_selectionFeedback();
-    [self setExpanded:!expanded_];
-  }
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)sender
@@ -601,6 +852,8 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
 
 - (void)setCursor:(CGPoint)point visible:(bool)visible
 {
+  /* \a point is in canvas points; the bar may live beside the canvas. */
+  point = [input_view_ convertPoint:point toView:self.superview];
   const BOOL over = visible && !self.hidden &&
                     CGRectContainsPoint(CGRectInset(self.frame, -6.0f, -6.0f), point);
   if (over == cursor_over_) {
@@ -632,10 +885,63 @@ static UIImage *GHOST_IOSModifierSymbol(NSString *name, const CGFloat size)
               hide ? "hidden" : "shown",
               hide ? "connected" : "disconnected");
   self.hidden = hide;
+  [self updateKeyPadVisibility];
+  [self updateCanvasInsets];
   if (hide) {
-    [self setExpanded:NO];
+    /* Release any modifier still held; the bar opens again with the keyboard gone. */
+    for (GHOSTIOSModifierKeyView *key in keys_) {
+      [key cancelTracking];
+    }
     [delegate_ modifierBeltDidHide];
   }
+}
+
+- (void)setContextKeys:(const GHOST_IOSBarKey *)keys count:(int)count
+{
+  count = std::max(0, std::min(count, GHOST_IOS_BAR_KEY_MAX));
+  bool same = count == context_key_count_;
+  for (int i = 0; same && i < count; i++) {
+    same = context_key_info_[i].stroke.key == keys[i].stroke.key &&
+           context_key_info_[i].stroke.modifiers == keys[i].stroke.modifiers;
+  }
+  if (same) {
+    return;
+  }
+  for (GHOSTIOSCommandKeyButton *key in context_keys_) {
+    [key forgetDelegate];
+    [stack_ removeArrangedSubview:key];
+    [key removeFromSuperview];
+  }
+  [context_keys_ removeAllObjects];
+  context_key_count_ = count;
+  for (int i = 0; i < count; i++) {
+    context_key_info_[i] = keys[i];
+    NSString *identifier = [NSString stringWithFormat:@"blender_command_key_%d", i];
+    GHOSTIOSCommandKeyButton *key = [GHOSTIOSCommandKeyButton keyWithInfo:keys[i]
+                                                                 delegate:delegate_
+                                                                    width:key_width
+                                                                   height:command_key_height
+                                                               identifier:identifier];
+    key.hidden = !expanded_;
+    [context_keys_ addObject:key];
+  }
+  [self arrangeForCorner];
+}
+
+- (void)setKeyPadVisible:(BOOL)visible
+{
+  key_pad_wanted_ = visible;
+  [self updateKeyPadVisibility];
+}
+
+- (void)setSettingsMenu:(UIMenu *)menu
+{
+  settings_button_.menu = menu;
+}
+
+- (BOOL)containsView:(UIView *)view
+{
+  return [view isDescendantOfView:self] || [view isDescendantOfView:key_pad_];
 }
 
 @end
@@ -669,7 +975,7 @@ bool GHOST_IOSModifierBelt_containsView(NSObject *belt, UIView *view)
   if (belt == nil || view == nil) {
     return false;
   }
-  return [view isDescendantOfView:(GHOSTIOSModifierBeltView *)belt];
+  return [(GHOSTIOSModifierBeltView *)belt containsView:view];
 }
 
 void GHOST_IOSModifierBelt_setModes(NSObject *belt,
@@ -681,6 +987,21 @@ void GHOST_IOSModifierBelt_setModes(NSObject *belt,
 void GHOST_IOSModifierBelt_setCursor(NSObject *belt, CGPoint point, bool visible)
 {
   [(GHOSTIOSModifierBeltView *)belt setCursor:point visible:visible];
+}
+
+void GHOST_IOSModifierBelt_setContextKeys(NSObject *belt, const GHOST_IOSBarKey *keys, int count)
+{
+  [(GHOSTIOSModifierBeltView *)belt setContextKeys:keys count:count];
+}
+
+void GHOST_IOSModifierBelt_setKeyPadVisible(NSObject *belt, bool visible)
+{
+  [(GHOSTIOSModifierBeltView *)belt setKeyPadVisible:visible];
+}
+
+void GHOST_IOSModifierBelt_setSettingsMenu(NSObject *belt, UIMenu *menu)
+{
+  [(GHOSTIOSModifierBeltView *)belt setSettingsMenu:menu];
 }
 
 /** \} */

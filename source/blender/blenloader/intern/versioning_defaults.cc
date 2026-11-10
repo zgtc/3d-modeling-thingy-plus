@@ -575,6 +575,10 @@ static void blo_update_defaults_scene(Main *bmain, Scene *scene)
   }
 }
 
+#ifdef BLENDER_PLATFORM_STARTUP_DEFAULTS_HOOK
+void BLENDER_PLATFORM_STARTUP_DEFAULTS_HOOK(Main *bmain, const char *app_template);
+#endif
+
 void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
 {
   /* For all app templates. */
@@ -901,6 +905,10 @@ void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
       scene.grease_pencil_settings.motion_blur_steps = 8;
     }
   }
+
+#ifdef BLENDER_PLATFORM_STARTUP_DEFAULTS_HOOK
+  BLENDER_PLATFORM_STARTUP_DEFAULTS_HOOK(bmain, app_template);
+#endif
 }
 
 }  // namespace blender
