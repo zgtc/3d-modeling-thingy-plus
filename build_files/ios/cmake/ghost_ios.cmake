@@ -12,6 +12,8 @@ list(APPEND SRC
   intern/GHOST_IOSInputTuning.hh
   intern/GHOST_IOSModifierBelt.hh
   intern/GHOST_IOSModifierBelt.mm
+  intern/GHOST_IOSToolIcon.hh
+  intern/GHOST_IOSToolIcon.mm
   intern/GHOST_IOSChrome.hh
   intern/GHOST_IOSHeaderDock.hh
   intern/GHOST_IOSHeaderDock.mm

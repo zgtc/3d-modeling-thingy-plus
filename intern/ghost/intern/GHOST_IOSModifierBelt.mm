@@ -24,6 +24,7 @@
 
 #include "GHOST_IOSModifierBelt.hh"
 #include "GHOST_IOSStyle.hh"
+#include "GHOST_IOSToolIcon.hh"
 
 #include <algorithm>
 #include <cstdlib>
@@ -817,8 +818,9 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
       UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
       button.translatesAutoresizingMaskIntoConstraints = NO;
       button.tag = i;
-      [button setImage:GHOST_IOSModifierSymbol([NSString stringWithUTF8String:tools[i].symbol],
-                                               19.0f)
+      /* Blender's own icon, as its toolbar draws it; a symbol if the app lacks the file. */
+      UIImage *icon = GHOST_IOSToolIcon_image(tools[i].icon, 32.0);
+      [button setImage:icon != nil ? icon : GHOST_IOSStyle_symbol(@(tools[i].symbol), 19.0)
               forState:UIControlStateNormal];
       button.tintColor = UIColor.whiteColor;
       button.layer.cornerRadius = 12.0f;
