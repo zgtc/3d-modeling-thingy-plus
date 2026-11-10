@@ -619,6 +619,12 @@ void GHOST_IOSVirtualPointer::setBlenderVisibility(const bool visible)
   impl_->updateCursorLayer();
 }
 
+void GHOST_IOSVirtualPointer::setTextEditing(const bool editing)
+{
+  impl_->state_.setTextEditing(editing);
+  impl_->updateCursorLayer();
+}
+
 void GHOST_IOSVirtualPointer::setGrabMode(const GHOST_TGrabCursorMode mode)
 {
   impl_->grab_mode_ = mode;

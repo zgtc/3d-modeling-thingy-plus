@@ -6,10 +6,11 @@
  * \ingroup GHOST
  * Platform-neutral contents of the iPad's native header and tool rail.
  *
- * The header replaces Blender's top bar with one menu button and a scrollable strip of workspace
- * tabs; the mode stays in the 3D Viewport's own mode menu. The tool panel on the left rail, and the
- * Tools page of the Pencil squeeze palette, replace the tool shelf on the left of the viewport. Every
- * control queues an operator call, so tools, modes and workspaces are Blender's own.
+ * The header replaces Blender's top bar with one menu button, a scrollable strip of workspace
+ * tabs, and Undo, Redo, Save and Search; the mode stays in the 3D Viewport's own mode menu. The
+ * tool panel on the left rail and the Tools page of the Pencil squeeze palette replace the tool
+ * shelf on the left of the viewport. Every control queues an operator call, so tools, modes and
+ * workspaces are Blender's own.
  */
 
 #pragma once
@@ -30,6 +31,35 @@ inline bool GHOST_IOSWorkspace_command(const char *name, char command[GHOST_IOS_
     return false;
   }
   return GHOST_IOSCommand_format(command, "ios.workspace", "name", name);
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Header actions
+ * The frequent commands at the right end of the header, after the workspace tabs.
+ * \{ */
+
+struct GHOST_IOSHeaderAction {
+  const char *title;
+  /** SF Symbol name. */
+  const char *symbol;
+  const char *identifier;
+  /** Operator to run. */
+  const char *idname;
+};
+
+inline constexpr GHOST_IOSHeaderAction GHOST_IOS_HEADER_ACTIONS[] = {
+    {"Undo", "arrow.uturn.backward", "blender_header_undo", "ed.undo"},
+    {"Redo", "arrow.uturn.forward", "blender_header_redo", "ed.redo"},
+    {"Save", "square.and.arrow.down", "blender_header_save", "wm.save_mainfile"},
+    {"Search", "magnifyingglass", "blender_header_search", "wm.search_menu"},
+};
+
+inline bool GHOST_IOSHeaderAction_command(const GHOST_IOSHeaderAction &action,
+                                          char command[GHOST_IOS_COMMAND_MAX])
+{
+  return GHOST_IOSCommand_format(command, action.idname);
 }
 
 /** \} */

@@ -33,6 +33,8 @@ static constexpr CGFloat tab_height = 32.0f;
   UIView *header_;
   UIButton *menu_button_;
   UIScrollView *tab_scroll_;
+  /** Undo, Redo, Save and Search, at the right end. */
+  UIStackView *action_stack_;
   UIStackView *tab_stack_;
 
 
@@ -108,6 +110,31 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
   [tab_scroll_ addSubview:tab_stack_];
   [header_ addSubview:tab_scroll_];
 
+  action_stack_ = [[UIStackView alloc] init];
+  action_stack_.translatesAutoresizingMaskIntoConstraints = NO;
+  action_stack_.axis = UILayoutConstraintAxisHorizontal;
+  action_stack_.spacing = padding * 0.5f;
+  action_stack_.accessibilityIdentifier = @"blender_header_actions";
+  NSInteger action_index = 0;
+  for (const GHOST_IOSHeaderAction &action : GHOST_IOS_HEADER_ACTIONS) {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    [button setImage:GHOST_IOSStyle_symbol(@(action.symbol), 18.0) forState:UIControlStateNormal];
+    button.tintColor = UIColor.whiteColor;
+    button.tag = action_index++;
+    button.accessibilityLabel = @(action.title);
+    button.accessibilityIdentifier = @(action.identifier);
+    [button addTarget:self
+                  action:@selector(handleAction:)
+        forControlEvents:UIControlEventTouchUpInside];
+    [NSLayoutConstraint activateConstraints:@[
+      [button.widthAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
+      [button.heightAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
+    ]];
+    [action_stack_ addArrangedSubview:button];
+  }
+  [header_ addSubview:action_stack_];
+
 
   UILayoutGuide *safe = host.safeAreaLayoutGuide;
   [NSLayoutConstraint activateConstraints:@[
@@ -123,7 +150,10 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
     [menu_button_.heightAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
     [tab_scroll_.leadingAnchor constraintEqualToAnchor:menu_button_.trailingAnchor
                                               constant:padding * 2.0f],
-    [tab_scroll_.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-padding],
+    [tab_scroll_.trailingAnchor constraintEqualToAnchor:action_stack_.leadingAnchor
+                                               constant:-padding],
+    [action_stack_.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-padding],
+    [action_stack_.centerYAnchor constraintEqualToAnchor:menu_button_.centerYAnchor],
     [tab_scroll_.centerYAnchor constraintEqualToAnchor:menu_button_.centerYAnchor],
     [tab_scroll_.heightAnchor constraintEqualToConstant:tab_height],
     [tab_stack_.leadingAnchor
@@ -143,6 +173,9 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
 
 - (void)teardown
 {
+  for (UIView *view in action_stack_.arrangedSubviews) {
+    [(UIButton *)view removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
+  }
   menu_button_.menu = nil;
   for (UIView *view in tab_stack_.arrangedSubviews) {
     if ([view isKindOfClass:[UIButton class]]) {
@@ -160,6 +193,7 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
   [header_ release];
   [menu_button_ release];
   [tab_scroll_ release];
+  [action_stack_ release];
   [tab_stack_ release];
   [super dealloc];
 }
@@ -172,6 +206,18 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
 - (void)queue:(const char *)command
 {
   [delegate_ headerDockQueueCommand:command];
+}
+
+- (void)handleAction:(UIButton *)sender
+{
+  if (sender.tag < 0 || sender.tag >= NSInteger(GHOST_IOS_ARRAY_LEN(GHOST_IOS_HEADER_ACTIONS))) {
+    return;
+  }
+  char command[GHOST_IOS_COMMAND_MAX];
+  if (GHOST_IOSHeaderAction_command(GHOST_IOS_HEADER_ACTIONS[sender.tag], command)) {
+    GHOST_IOSStyle_selectionFeedback();
+    [self queue:command];
+  }
 }
 
 /* -------------------------------------------------------------------- */

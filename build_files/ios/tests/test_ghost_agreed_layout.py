@@ -241,3 +241,43 @@ class AgreedLayoutSourceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeaderActionTests(unittest.TestCase):
+    """Item 4 of the device feedback on #5: Undo, Redo, Save and Search in the top bar, beside
+    the menu button and the workspace tabs."""
+
+    def test_header_actions_run_blenders_own_operators(self) -> None:
+        run_harness(
+            self,
+            """
+            const char *const titles[] = {"Undo", "Redo", "Save", "Search"};
+            const char *const commands[] = {"ed.undo", "ed.redo", "wm.save_mainfile",
+                                            "wm.search_menu"};
+            CHECK(GHOST_IOS_ARRAY_LEN(GHOST_IOS_HEADER_ACTIONS) == 4);
+            for (int i = 0; i < 4; i++) {
+              const GHOST_IOSHeaderAction &action = GHOST_IOS_HEADER_ACTIONS[i];
+              CHECK(std::strcmp(action.title, titles[i]) == 0);
+              char command[GHOST_IOS_COMMAND_MAX];
+              CHECK(GHOST_IOSHeaderAction_command(action, command));
+              CHECK(std::strcmp(command, commands[i]) == 0);
+              CHECK(action.symbol != nullptr && action.identifier != nullptr);
+            }
+            """,
+        )
+
+    def test_header_shows_the_actions_after_the_tabs(self) -> None:
+        header = HEADER_SOURCE.read_text()
+        self.assertIn("for (const GHOST_IOSHeaderAction &action : GHOST_IOS_HEADER_ACTIONS)", header)
+        self.assertIn("- (void)handleAction:(UIButton *)sender", header)
+        # The menu button and tabs stay; the tabs now end where the actions begin.
+        self.assertIn('@"blender_native_menu"', header)
+        self.assertIn('@"blender_workspace_tabs"', header)
+        self.assertIn("[tab_scroll_.trailingAnchor constraintEqualToAnchor:action_stack_.leadingAnchor",
+                      header)
+        self.assertIn("[action_stack_.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor",
+                      header)
+        handle = header[header.index("- (void)handleAction:(UIButton *)sender") :]
+        handle = handle[: handle.index("\n}\n")]
+        self.assertIn("GHOST_IOSHeaderAction_command(", handle)
+        self.assertIn("[self queue:command];", handle)

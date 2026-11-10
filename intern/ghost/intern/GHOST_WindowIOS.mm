@@ -3044,6 +3044,10 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
         return GHOST_kFailure;
       }
       onscreen_keyboard_active = true;
+      if (virtual_pointer != nullptr) {
+        /* The drawn pointer would otherwise rest over the text being edited. */
+        virtual_pointer->setTextEditing(true);
+      }
       [self.rootViewController setNeedsUpdateOfPrefersPointerLocked];
       [self applyKeyboardSelection:keyboard_properties];
     }
@@ -3064,6 +3068,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
        (like generating events back to Blender)
        */
       onscreen_keyboard_active = false;
+      if (virtual_pointer != nullptr) {
+        virtual_pointer->setTextEditing(false);
+      }
 
       /* Shut down the keyboard. */
       [text_field resignFirstResponder];
