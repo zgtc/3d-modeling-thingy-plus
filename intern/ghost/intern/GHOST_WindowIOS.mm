@@ -11,6 +11,7 @@
 #include "GHOST_ContextIOS.hh"
 #include "GHOST_IOSFileAccess.hh"
 #include "GHOST_IOSInputTuning.hh"
+#include "GHOST_IOSHeaderDock.hh"
 #include "GHOST_IOSInteraction.hh"
 #include "GHOST_IOSMenuBar.hh"
 #include "GHOST_IOSModifierBelt.hh"
@@ -345,7 +346,8 @@ typedef struct UserInputEvent {
                                       UITextFieldDelegate,
                                       GHOSTIOSModifierBeltDelegate,
                                       GHOSTIOSPencilPaletteDelegate,
-                                      GHOSTIOSResizeHandlesDelegate>
+                                      GHOSTIOSResizeHandlesDelegate,
+                                      GHOSTIOSHeaderDockDelegate>
 {
   GHOST_SystemIOS *system;
   GHOST_WindowIOS *window;
@@ -401,6 +403,14 @@ typedef struct UserInputEvent {
   /* On-screen command bar: modifiers, shortcut keys and the transform key pad. */
   NSObject *modifier_belt;
   GHOST_IOSModifierLatch *modifier_latch;
+
+  /* Native header and tool dock in place of Blender's top bar and tool shelf (iPad). */
+  NSObject *header_dock;
+  /* The squeeze palette's Tools page, and where the palette was opened. */
+  bool palette_tools_page;
+  CGPoint palette_point;
+  GHOST_IOSPaletteSlot palette_tool_slots[GHOST_IOS_PALETTE_SLOT_COUNT];
+  char palette_tool_commands[GHOST_IOS_PALETTE_SLOT_COUNT][GHOST_IOS_COMMAND_MAX];
 
   /* Grab handles on sidebar and toolbar edges. */
   NSObject *resize_handles;
@@ -663,6 +673,9 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   resize_handles = nil;
   resize_handle_dragging = false;
   settings_observer = nil;
+  header_dock = nil;
+  palette_tools_page = false;
+  palette_point = CGPointZero;
   pencil_palette = nil;
   pencil_palette_slots = nullptr;
   touch_settings = GHOST_IOSTouchSettings_load();
@@ -701,6 +714,8 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   pencil_palette_slots = nullptr;
   GHOST_IOSResizeHandles_destroy(resize_handles);
   resize_handles = nil;
+  GHOST_IOSHeaderDock_destroy(header_dock);
+  header_dock = nil;
   if (settings_observer != nil) {
     [NSNotificationCenter.defaultCenter removeObserver:settings_observer];
     [settings_observer release];
@@ -858,6 +873,17 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   modifier_belt = GHOST_IOSModifierBelt_create(window->getView(), self);
   pencil_palette = GHOST_IOSPencilPalette_create(window->getView(), self);
   resize_handles = GHOST_IOSResizeHandles_create(window->getView(), self);
+  if (window->isMainWindow() &&
+      UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad)
+  {
+    /* iPad only: the iPhone keeps Blender's own top bar and tool shelf. */
+    header_dock = GHOST_IOSHeaderDock_create(window->getView(), self);
+    if (header_dock != nil) {
+      char command[GHOST_IOS_COMMAND_MAX];
+      GHOST_IOSCommand_format(command, "ios.native_chrome", "enabled", "1");
+      [self queueCommand:command];
+    }
+  }
   GHOSTUIWindow *ui_window = self;
   settings_observer = [[NSNotificationCenter.defaultCenter
       addObserverForName:GHOST_IOSTouchSettingsDidChangeNotification
@@ -1011,6 +1037,7 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   interaction_context = context;
   tool_history.update(context);
   [self updateCommandBarForContext];
+  GHOST_IOSHeaderDock_setContext(header_dock, context);
   if (self.isKeyWindow) {
     GHOST_IOSMenuBar_setContext(context);
   }
@@ -1261,7 +1288,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 
 - (void)pencilPaletteEditSlot:(int)index
 {
-  if (index < 0 || index >= GHOST_IOS_PALETTE_SLOT_COUNT) {
+  /* Tools follow Blender's tool system; only the commands page can be customized. */
+  if (palette_tools_page || index < 0 || index >= GHOST_IOS_PALETTE_SLOT_COUNT) {
     return;
   }
   char name[GHOST_IOS_CUSTOM_NAME_MAX];
@@ -1301,13 +1329,47 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   [self applyModifierLatch];
 }
 
-/** \a point is in view points. */
+- (void)headerDockQueueCommand:(const char *)command
+{
+  [self queueCommand:command];
+}
+
+/** \a point is in view points. Opens on the commands page. */
 - (void)showPencilPaletteAt:(CGPoint)point
 {
-  custom_palette.build(interaction_context, GHOST_IOSSettings_shared());
-  pencil_palette_slots = custom_palette.slots;
-  GHOST_IOSPencilPalette_show(
-      pencil_palette, point, pencil_palette_slots, GHOST_IOS_PALETTE_SLOT_COUNT);
+  palette_tools_page = false;
+  palette_point = point;
+  [self showPalettePage];
+}
+
+- (void)showPalettePage
+{
+  int count = GHOST_IOS_PALETTE_SLOT_COUNT;
+  if (palette_tools_page) {
+    count = GHOST_IOSPalette_toolSlots(
+        interaction_context, palette_tool_slots, palette_tool_commands);
+    pencil_palette_slots = palette_tool_slots;
+  }
+  else {
+    custom_palette.build(interaction_context, GHOST_IOSSettings_shared());
+    pencil_palette_slots = custom_palette.slots;
+  }
+  /* The middle shows the page a tap switches to. */
+  GHOST_IOSPencilPalette_setCenterSymbol(pencil_palette,
+                                         palette_tools_page ? "command" : "hammer");
+  GHOST_IOSPencilPalette_show(pencil_palette, palette_point, pencil_palette_slots, count);
+}
+
+/* The Tools page holds the tool shelf's tools, so the left of the viewport can stay clear. */
+- (void)pencilPaletteSwitchPage
+{
+  int count = 0;
+  GHOST_IOSDock_tools(interaction_context, &count);
+  if (!palette_tools_page && count == 0) {
+    return;
+  }
+  palette_tools_page = !palette_tools_page;
+  [self showPalettePage];
 }
 
 - (void)runPencilAction:(GHOST_IOSPencilAction)action at:(CGPoint)view_point
@@ -2948,6 +3010,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   UIView *canvas_;
   CGFloat leading_inset_;
   CGFloat trailing_inset_;
+  CGFloat top_inset_;
+  CGFloat bottom_inset_;
 }
 - (instancetype)initWithCanvas:(UIView *)canvas;
 @end
@@ -2963,6 +3027,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   canvas_ = canvas;
   leading_inset_ = 0.0f;
   trailing_inset_ = 0.0f;
+  top_inset_ = 0.0f;
+  bottom_inset_ = 0.0f;
   /* Matches the area around Blender's editors, so the bar's column reads as part of the UI. */
   self.backgroundColor = [UIColor colorWithWhite:0.11f alpha:1.0f];
   self.accessibilityIdentifier = @"blender_canvas_container";
@@ -2981,14 +3047,35 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   [self setNeedsLayout];
 }
 
+- (void)setCanvasInsetsTop:(CGFloat)top bottom:(CGFloat)bottom
+{
+  if (top == top_inset_ && bottom == bottom_inset_) {
+    return;
+  }
+  top_inset_ = top;
+  bottom_inset_ = bottom;
+  [self setNeedsLayout];
+}
+
+- (void)safeAreaInsetsDidChange
+{
+  [super safeAreaInsetsDidChange];
+  [self setNeedsLayout];
+}
+
 - (void)layoutSubviews
 {
-  [super layoutSubviews];
   const CGRect bounds = self.bounds;
+  /* A header or dock also covers the status bar or home indicator area next to it. */
+  const CGFloat top = top_inset_ > 0.0f ? top_inset_ + self.safeAreaInsets.top : 0.0f;
+  const CGFloat bottom = bottom_inset_ > 0.0f ? bottom_inset_ + self.safeAreaInsets.bottom :
+                                                0.0f;
   const CGFloat width = std::max<CGFloat>(1.0f, bounds.size.width - leading_inset_ - trailing_inset_);
-  /* A new canvas size reaches Blender as a window resize, through the drawable size. */
-  canvas_.frame = CGRectMake(bounds.origin.x + leading_inset_, bounds.origin.y, width,
-                             bounds.size.height);
+  const CGFloat height = std::max<CGFloat>(1.0f, bounds.size.height - top - bottom);
+  /* A new canvas size reaches Blender as a window resize, through the drawable size. Set it
+   * before Auto Layout runs, so views anchored to the canvas follow it in the same pass. */
+  canvas_.frame = CGRectMake(bounds.origin.x + leading_inset_, bounds.origin.y + top, width, height);
+  [super layoutSubviews];
 }
 
 @end

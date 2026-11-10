@@ -37,6 +37,8 @@ enum class GHOST_IOSMode : uint8_t {
 constexpr int GHOST_IOS_IDNAME_MAX = 64;
 constexpr int GHOST_IOS_COMMAND_MAX = 256;
 constexpr int GHOST_IOS_RESIZE_EDGE_MAX = 8;
+constexpr int GHOST_IOS_WORKSPACE_MAX = 16;
+constexpr int GHOST_IOS_WORKSPACE_NAME_MAX = 32;
 
 /**
  * The draggable edge of a visible sidebar or toolbar, in GHOST client pixels (origin top left).
@@ -68,13 +70,30 @@ struct GHOST_IOSInteractionContext {
   /** Resizable sidebars and toolbars in the whole window. */
   GHOST_IOSResizeEdge resize_edges[GHOST_IOS_RESIZE_EDGE_MAX];
   int resize_edges_num = 0;
+  /** The window's workspaces in tab order, and the active one, or -1. */
+  char workspaces[GHOST_IOS_WORKSPACE_MAX][GHOST_IOS_WORKSPACE_NAME_MAX] = {};
+  int workspaces_num = 0;
+  int active_workspace = -1;
 
   bool operator==(const GHOST_IOSInteractionContext &other) const
   {
     return editor == other.editor && mode == other.mode &&
            over_main_region == other.over_main_region &&
            std::strcmp(modal_operator, other.modal_operator) == 0 &&
-           std::strcmp(tool, other.tool) == 0 && sameResizeEdges(other);
+           std::strcmp(tool, other.tool) == 0 && sameResizeEdges(other) &&
+           sameWorkspaces(other);
+  }
+  bool sameWorkspaces(const GHOST_IOSInteractionContext &other) const
+  {
+    if (workspaces_num != other.workspaces_num || active_workspace != other.active_workspace) {
+      return false;
+    }
+    for (int i = 0; i < workspaces_num; i++) {
+      if (std::strcmp(workspaces[i], other.workspaces[i]) != 0) {
+        return false;
+      }
+    }
+    return true;
   }
   bool sameResizeEdges(const GHOST_IOSInteractionContext &other) const
   {
@@ -102,6 +121,9 @@ struct GHOST_IOSInteractionContext {
  * under the pointer. Ids starting with `ios.` are handled by the window manager's iOS shim:
  * - `ios.open_editor` with `space=PROPERTIES` or `space=OUTLINER` opens a floating editor.
  * - `ios.touch_spacing` with `enabled=1` or `enabled=0` sets the touch spacing preset.
+ * - `ios.workspace` with `name=<workspace>` makes that workspace active.
+ * - `ios.native_chrome` with `enabled=1` hides Blender's top bar for the native header, and
+ *   hides the 3D Viewport tool shelf once, for the native tool dock.
  */
 inline bool GHOST_IOSCommand_format(char command[GHOST_IOS_COMMAND_MAX],
                                     const char *idname,

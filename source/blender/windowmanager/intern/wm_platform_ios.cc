@@ -11,6 +11,7 @@
 #include "BKE_main.hh"
 #include "BKE_screen.hh"
 #include "BKE_wm_runtime.hh"
+#include "BLI_listbase.h"
 #include "BLI_listbase_iterator.hh"
 #include "BLI_math_vector.h"
 #include "BLI_rect.h"
@@ -265,6 +266,18 @@ static GHOST_IOSInteractionContext wm_ios_interaction_context(const Main &bmain,
 
   wm_ios_resize_edges(win, *screen, context);
 
+  /* Workspace tabs, in Blender's order. */
+  const WorkSpace *active_workspace = WM_window_get_active_workspace(&win);
+  for (const WorkSpace &workspace : bmain.workspaces) {
+    if (context.workspaces_num == GHOST_IOS_WORKSPACE_MAX) {
+      break;
+    }
+    if (&workspace == active_workspace) {
+      context.active_workspace = context.workspaces_num;
+    }
+    STRNCPY(context.workspaces[context.workspaces_num++], workspace.id.name + 2);
+  }
+
   WorkSpace *workspace = WM_window_get_active_workspace(&win);
   bToolKey tkey;
   if (workspace != nullptr &&
@@ -364,9 +377,70 @@ static void wm_ios_set_touch_spacing(const bool enabled)
   WM_main_add_notifier(NC_WINDOW, nullptr);
 }
 
+/** The iPad's native header and tool dock are active. */
+static bool wm_ios_native_chrome = false;
+
+/** Hide the 3D Viewport tool shelf once, when the native tool dock takes its place. */
+static void wm_ios_hide_tool_shelves(Main &bmain)
+{
+  for (bScreen &screen : bmain.screens) {
+    for (ScrArea &area : screen.areabase) {
+      if (area.spacetype != SPACE_VIEW3D) {
+        continue;
+      }
+      for (ARegion &region : area.regionbase) {
+        if (region.regiontype == RGN_TYPE_TOOLS && !(region.flag & RGN_FLAG_HIDDEN)) {
+          region.flag |= RGN_FLAG_HIDDEN;
+          screen.do_refresh = true;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Keep Blender's top bar hidden while the native header replaces it. Leaving Focus mode
+ * shows every global area again, so this runs on every main loop pass.
+ */
+static void wm_ios_hide_topbar(wmWindow &win)
+{
+  for (ScrArea &area : win.global_areas.areabase) {
+    if (area.spacetype == SPACE_TOPBAR && area.global != nullptr &&
+        !(area.global->flag & GLOBAL_AREA_IS_HIDDEN))
+    {
+      area.global->flag |= GLOBAL_AREA_IS_HIDDEN;
+      if (bScreen *screen = WM_window_get_active_screen(&win)) {
+        screen->do_refresh = true;
+      }
+    }
+  }
+}
+
 /** Commands for the touch layer that are not operators. */
 static bool wm_ios_run_builtin(bContext *C, const char *idname, const char *name, const char *value)
 {
+  if (STREQ(idname, "ios.workspace")) {
+    if (name != nullptr && STREQ(name, "name")) {
+      Main *bmain = CTX_data_main(C);
+      wmWindow *win = CTX_wm_window(C);
+      WorkSpace *workspace = static_cast<WorkSpace *>(
+          BLI_findstring(&bmain->workspaces, value, offsetof(ID, name) + 2));
+      if (workspace != nullptr && win != nullptr &&
+          workspace != WM_window_get_active_workspace(win))
+      {
+        WM_window_set_active_workspace(C, win, workspace);
+      }
+    }
+    return true;
+  }
+  if (STREQ(idname, "ios.native_chrome")) {
+    const bool enabled = name != nullptr && STREQ(name, "enabled") && STREQ(value, "1");
+    if (enabled && !wm_ios_native_chrome) {
+      wm_ios_hide_tool_shelves(*CTX_data_main(C));
+    }
+    wm_ios_native_chrome = enabled;
+    return true;
+  }
   if (STREQ(idname, "ios.touch_spacing")) {
     wm_ios_set_touch_spacing(name != nullptr && STREQ(name, "enabled") && STREQ(value, "1"));
     return true;
@@ -483,6 +557,9 @@ void wm_ios_touch_channel_update(bContext *C)
     char command[GHOST_IOS_COMMAND_MAX];
     while (GHOST_IOS_TakeCommand(ghost_window, command)) {
       wm_ios_run_command(C, win, command);
+    }
+    if (wm_ios_native_chrome) {
+      wm_ios_hide_topbar(win);
     }
     GHOST_IOS_SetInteractionContext(ghost_window, wm_ios_interaction_context(*bmain, win));
   }

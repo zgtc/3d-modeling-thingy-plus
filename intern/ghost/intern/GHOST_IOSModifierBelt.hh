@@ -50,6 +50,8 @@ enum class GHOST_IOSBarAction : uint8_t {
 /** The view that holds Blender's canvas and the bar side by side, and insets the canvas. */
 @protocol GHOSTIOSCanvasInsetting <NSObject>
 - (void)setCanvasInsetsLeading:(CGFloat)leading trailing:(CGFloat)trailing;
+/** Room for the native header and tool dock, not counting the screen's safe area. */
+- (void)setCanvasInsetsTop:(CGFloat)top bottom:(CGFloat)bottom;
 @end
 
 /** Receives touches on the belt's keys. Timestamps are `UITouch.timestamp` seconds. */

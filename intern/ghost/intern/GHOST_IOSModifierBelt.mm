@@ -722,11 +722,18 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
                                              constant:edge_inset] :
           [self.trailingAnchor constraintEqualToAnchor:safe_area.trailingAnchor
                                               constant:-edge_inset];
+  /* Level with the canvas, so a native header or tool dock above or below stays clear. */
+  UIView *vertical_guide = [self insettingHost] != nil ? input_view_ : nil;
   NSLayoutConstraint *vertical =
       [self isTopCorner] ?
-          [self.topAnchor constraintEqualToAnchor:safe_area.topAnchor constant:edge_inset] :
-          [self.bottomAnchor constraintEqualToAnchor:safe_area.bottomAnchor
-                                            constant:-bottom_inset];
+          [self.topAnchor
+              constraintEqualToAnchor:vertical_guide != nil ? vertical_guide.topAnchor :
+                                                              safe_area.topAnchor
+                             constant:edge_inset] :
+          [self.bottomAnchor
+              constraintEqualToAnchor:vertical_guide != nil ? vertical_guide.bottomAnchor :
+                                                              safe_area.bottomAnchor
+                             constant:-bottom_inset];
   /* The key pad opens towards the middle of the screen, level with the bar's handle end. */
   NSLayoutConstraint *pad_horizontal =
       [self isLeftCorner] ?
