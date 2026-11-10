@@ -6,10 +6,10 @@
  * \ingroup GHOST
  * The iPad's left rail and quick bar.
  *
- * The rail runs down the left of Blender's canvas as two panels: the tools of the current
- * 3D Viewport mode on top, filling the height, and Shift, Ctrl, Alt and Cmd below. The quick bar
- * runs along the bottom: Shift, Ctrl, Alt and Cmd again, the shortcut keys for the editor and mode
- * under the pointer, and the settings button. A divider above the quick bar sets its height. The
+ * The rail runs down the left of Blender's canvas with the tools of the current 3D Viewport mode,
+ * filling the height. The quick bar runs along the bottom: Shift, Ctrl, Alt and Cmd, the shortcut
+ * keys for the editor and mode under the pointer (or of the running tool), and the settings
+ * button. A divider above the quick bar sets its height. The
  * transform key pad shows above the quick bar while a modal operator takes typed values.
  */
 
@@ -105,7 +105,7 @@ NSObject *GHOST_IOSModifierBelt_create(UIView *input_view,
                                        id<GHOSTIOSModifierBeltDelegate> delegate);
 void GHOST_IOSModifierBelt_destroy(NSObject *belt);
 bool GHOST_IOSModifierBelt_containsView(NSObject *belt, UIView *view);
-/** Show each modifier key's state, on the rail and the quick bar, indexed by #GHOST_IOSModifier. */
+/** Show each modifier key's state on the quick bar, indexed by #GHOST_IOSModifier. */
 void GHOST_IOSModifierBelt_setModes(NSObject *belt,
                                     const GHOST_IOSModifierMode modes[GHOST_IOS_MODIFIER_COUNT]);
 /** Kept for the window's cursor updates; the bars sit beside the canvas, so nothing fades. */

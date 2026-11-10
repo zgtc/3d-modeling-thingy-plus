@@ -6,10 +6,10 @@
  * \ingroup GHOST
  * The iPad's left rail and quick bar, beside Blender's canvas.
  *
- * The rail runs down the left of the canvas as two panels: the tools of the current 3D Viewport
- * mode on top, filling the height, and Shift, Ctrl, Alt and Cmd below. The quick bar runs along
- * the bottom: Shift, Ctrl, Alt and Cmd again, the shortcut keys for the editor and mode under the
- * pointer, and the settings button. Dragging the divider above the quick bar sets its height.
+ * The rail runs down the left of the canvas with the tools of the current 3D Viewport mode,
+ * filling the height. The quick bar runs along the bottom: Shift, Ctrl, Alt and Cmd, the shortcut
+ * keys for the editor and mode under the pointer (or of the running tool), and the settings
+ * button. Dragging the divider above the quick bar sets its height.
  * While a modal operator takes typed values, a key pad with axes and numbers shows above the quick
  * bar, so `G Z 2 Enter` works without a keyboard. The canvas is inset so none of this covers it.
  *
@@ -417,8 +417,6 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
   NSMutableArray<UIButton *> *tool_buttons_;
   const GHOST_IOSToolItem *tools_;
   int tools_count_;
-  UIView *modifier_panel_;
-  NSArray<GHOSTIOSModifierKeyView *> *rail_modifier_keys_;
 
   /* Quick bar: modifiers, shortcut keys, settings. */
   UIView *quick_bar_;
@@ -496,19 +494,6 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
   [tool_panel_ addSubview:tool_scroll_view_];
   [host_ addSubview:tool_panel_];
 
-  /* Rail, bottom panel: the modifiers. */
-  modifier_panel_ = [GHOST_IOSBelt_panel(@"blender_rail_modifiers", GHOST_IOS_RAIL_WIDTH * 0.5)
-      retain];
-  rail_modifier_keys_ = [GHOST_IOSBelt_modifierKeys(delegate, @"_rail") retain];
-  UIStackView *modifier_stack = [[[UIStackView alloc]
-      initWithArrangedSubviews:rail_modifier_keys_] autorelease];
-  modifier_stack.translatesAutoresizingMaskIntoConstraints = NO;
-  modifier_stack.axis = UILayoutConstraintAxisVertical;
-  modifier_stack.alignment = UIStackViewAlignmentCenter;
-  modifier_stack.spacing = belt_padding;
-  [modifier_panel_ addSubview:modifier_stack];
-  [host_ addSubview:modifier_panel_];
-
   /* Quick bar along the bottom. */
   quick_bar_ = [GHOST_IOSBelt_panel(@"blender_quick_bar", 14.0) retain];
   quick_modifier_keys_ = [GHOST_IOSBelt_modifierKeys(delegate, @"") retain];
@@ -560,14 +545,13 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
       constraintEqualToConstant:GHOST_IOSQuickBar_clampHeight(stored)] retain];
 
   const CGFloat margin = GHOST_IOS_RAIL_MARGIN;
-  const CGFloat modifier_height = handle_size * GHOST_IOS_MODIFIER_COUNT +
-                                  belt_padding * (GHOST_IOS_MODIFIER_COUNT - 1) + 16.0f;
   [NSLayoutConstraint activateConstraints:@[
     /* The rail stands beside the canvas, level with it. */
     [tool_panel_.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:margin],
     [tool_panel_.widthAnchor constraintEqualToConstant:GHOST_IOS_RAIL_WIDTH],
     [tool_panel_.topAnchor constraintEqualToAnchor:input_view.topAnchor constant:margin],
-    [tool_panel_.bottomAnchor constraintEqualToAnchor:modifier_panel_.topAnchor constant:-margin],
+    /* Shift, Ctrl, Alt and Cmd are on the quick bar only, so the tools get the full height. */
+    [tool_panel_.bottomAnchor constraintEqualToAnchor:input_view.bottomAnchor constant:-margin],
     [tool_scroll_view_.leadingAnchor constraintEqualToAnchor:tool_panel_.leadingAnchor],
     [tool_scroll_view_.trailingAnchor constraintEqualToAnchor:tool_panel_.trailingAnchor],
     [tool_scroll_view_.topAnchor constraintEqualToAnchor:tool_panel_.topAnchor constant:10.0f],
@@ -581,14 +565,6 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
     [tool_stack_.trailingAnchor
         constraintEqualToAnchor:tool_scroll_view_.contentLayoutGuide.trailingAnchor],
     [tool_stack_.widthAnchor constraintEqualToAnchor:tool_scroll_view_.frameLayoutGuide.widthAnchor],
-
-    [modifier_panel_.leadingAnchor constraintEqualToAnchor:tool_panel_.leadingAnchor],
-    [modifier_panel_.widthAnchor constraintEqualToConstant:GHOST_IOS_RAIL_WIDTH],
-    [modifier_panel_.bottomAnchor constraintEqualToAnchor:input_view.bottomAnchor
-                                                 constant:-margin],
-    [modifier_panel_.heightAnchor constraintEqualToConstant:modifier_height],
-    [modifier_stack.centerXAnchor constraintEqualToAnchor:modifier_panel_.centerXAnchor],
-    [modifier_stack.centerYAnchor constraintEqualToAnchor:modifier_panel_.centerYAnchor],
 
     /* The quick bar spans the bottom, above the home indicator. */
     [quick_bar_.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:margin],
@@ -659,9 +635,6 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
   for (UIButton *button in tool_buttons_) {
     [button removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
   }
-  for (GHOSTIOSModifierKeyView *key in rail_modifier_keys_) {
-    [key cancelTracking];
-  }
   for (GHOSTIOSModifierKeyView *key in quick_modifier_keys_) {
     [key cancelTracking];
   }
@@ -672,7 +645,6 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
   }
   delegate_ = nil;
   [tool_panel_ removeFromSuperview];
-  [modifier_panel_ removeFromSuperview];
   [quick_bar_ removeFromSuperview];
   [divider_ removeFromSuperview];
   [key_pad_ removeFromSuperview];
@@ -684,8 +656,6 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
   [tool_scroll_view_ release];
   [tool_stack_ release];
   [tool_buttons_ release];
-  [modifier_panel_ release];
-  [rail_modifier_keys_ release];
   [quick_bar_ release];
   [quick_stack_ release];
   [quick_modifier_keys_ release];
@@ -875,10 +845,8 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
 
 - (void)setModes:(const GHOST_IOSModifierMode *)modes
 {
-  for (NSArray<GHOSTIOSModifierKeyView *> *set in @[ rail_modifier_keys_, quick_modifier_keys_ ]) {
-    for (GHOSTIOSModifierKeyView *key in set) {
-      [key setMode:modes[int(key.modifier)]];
-    }
+  for (GHOSTIOSModifierKeyView *key in quick_modifier_keys_) {
+    [key setMode:modes[int(key.modifier)]];
   }
 }
 
@@ -899,16 +867,12 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
   quick_bar_hidden_ = hide;
   quick_bar_.hidden = hide;
   divider_.hidden = hide;
-  modifier_panel_.hidden = hide;
   [self updateKeyPadVisibility];
   [self updateCanvasInsets];
   if (hide) {
     /* Release any modifier still held; the keys come back with the keyboard gone. */
-    for (NSArray<GHOSTIOSModifierKeyView *> *set in @[ rail_modifier_keys_, quick_modifier_keys_ ])
-    {
-      for (GHOSTIOSModifierKeyView *key in set) {
-        [key cancelTracking];
-      }
+    for (GHOSTIOSModifierKeyView *key in quick_modifier_keys_) {
+      [key cancelTracking];
     }
     [delegate_ modifierBeltDidHide];
   }
@@ -968,7 +932,7 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
 
 - (BOOL)containsView:(UIView *)view
 {
-  for (UIView *part in @[ tool_panel_, modifier_panel_, quick_bar_, divider_, key_pad_ ]) {
+  for (UIView *part in @[ tool_panel_, quick_bar_, divider_, key_pad_ ]) {
     if ([view isDescendantOfView:part]) {
       return YES;
     }

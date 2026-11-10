@@ -112,7 +112,7 @@ class CommandBarKeyTests(unittest.TestCase):
 
             const GHOST_IOSBarKey *node = GHOST_IOSCommandBar_keys(
                 context(GHOST_IOSEditor::Node, GHOST_IOSMode::Other), &count);
-            CHECK(count <= GHOST_IOS_BAR_KEY_MAX && has_title(node, count, "Add"));
+            CHECK(count <= GHOST_IOS_BAR_KEY_MAX && has_title(node, count, "\u21e7A"));
 
             const GHOST_IOSBarKey *other = GHOST_IOSCommandBar_keys(
                 context(GHOST_IOSEditor::Other, GHOST_IOSMode::Object), &count);
@@ -255,7 +255,7 @@ class CommandBarSourceTests(unittest.TestCase):
         contains = self.belt[self.belt.index("- (BOOL)containsView:(UIView *)view\n{") :]
         contains = contains[: contains.index("\n}\n")]
         self.assertIn("isDescendantOfView:part", contains)
-        for part in ("tool_panel_", "modifier_panel_", "quick_bar_", "divider_", "key_pad_"):
+        for part in ("tool_panel_", "quick_bar_", "divider_", "key_pad_"):
             self.assertIn(part, contains)
         api = self.belt[self.belt.index("bool GHOST_IOSModifierBelt_containsView(") :]
         api = api[: api.index("\n}\n")]

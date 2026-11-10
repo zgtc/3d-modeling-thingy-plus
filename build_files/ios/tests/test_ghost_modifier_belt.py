@@ -295,7 +295,6 @@ class GhostModifierBeltIntegrationTests(unittest.TestCase):
     def test_belt_keys_expose_state_for_ui_tests(self) -> None:
         source = BELT_SOURCE.read_text()
         for identifier in (
-            "blender_rail_modifiers",
             "blender_quick_bar",
             "blender_modifier_shift",
             "blender_modifier_control",

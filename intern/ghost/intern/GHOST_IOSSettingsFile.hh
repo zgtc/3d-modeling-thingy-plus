@@ -667,8 +667,9 @@ inline const char *GHOST_IOSCommandBar_setName(const GHOST_IOSInteractionContext
       case GHOST_IOSMode::Edit:
         return "edit";
       case GHOST_IOSMode::Sculpt:
-      case GHOST_IOSMode::Paint:
         return "sculpt";
+      case GHOST_IOSMode::Paint:
+        return "paint";
       case GHOST_IOSMode::Other:
         break;
     }

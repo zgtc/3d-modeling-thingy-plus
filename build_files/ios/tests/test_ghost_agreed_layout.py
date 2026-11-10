@@ -96,6 +96,54 @@ class AgreedLayoutTableTests(unittest.TestCase):
             """,
         )
 
+    def test_every_key_set_starts_with_esc_and_ends_with_tab(self) -> None:
+        # Device feedback on #5, item 11: six keys each, Esc first, Tab last, mode keys between.
+        run_harness(
+            self,
+            """
+            struct Expected {
+              GHOST_IOSEditor editor;
+              GHOST_IOSMode mode;
+              const char *set;
+              const char *titles[6];
+            };
+            const Expected sets[] = {
+                {GHOST_IOSEditor::View3D, GHOST_IOSMode::Object, "object",
+                 {"Esc", "X", "S", "R", "G", "Tab"}},
+                {GHOST_IOSEditor::View3D, GHOST_IOSMode::Edit, "edit",
+                 {"Esc", "E", "X", "R", "G", "Tab"}},
+                {GHOST_IOSEditor::View3D, GHOST_IOSMode::Sculpt, "sculpt",
+                 {"Esc", "F", "\u21e7F", "H", "\u2325H", "Tab"}},
+                {GHOST_IOSEditor::View3D, GHOST_IOSMode::Paint, "paint",
+                 {"Esc", "F", "\u21e7F", "X", "E", "Tab"}},
+                {GHOST_IOSEditor::Node, GHOST_IOSMode::Other, "node",
+                 {"Esc", "\u21e7A", "X", "G", "H", "Tab"}},
+            };
+            for (const Expected &expected : sets) {
+              GHOST_IOSInteractionContext context;
+              context.editor = expected.editor;
+              context.mode = expected.mode;
+              int count = 0;
+              const GHOST_IOSBarKey *keys = GHOST_IOSCommandBar_keys(context, &count);
+              CHECK(count == 6);
+              CHECK(std::strcmp(GHOST_IOSCommandBar_setName(context), expected.set) == 0);
+              for (int i = 0; i < 6; i++) {
+                CHECK(std::strcmp(keys[i].title, expected.titles[i]) == 0);
+              }
+            }
+            /* The generic fallback keeps its four keys. */
+            GHOST_IOSInteractionContext other;
+            other.editor = GHOST_IOSEditor::Other;
+            int count = 0;
+            const GHOST_IOSBarKey *keys = GHOST_IOSCommandBar_keys(other, &count);
+            const char *const fallback[] = {"Tab", "Esc", "Delete", "Return"};
+            CHECK(count == 4);
+            for (int i = 0; i < 4; i++) {
+              CHECK(std::strcmp(keys[i].title, fallback[i]) == 0);
+            }
+            """,
+        )
+
     def test_timeline_starts_minimized_and_the_choice_is_saved(self) -> None:
         run_harness(
             self,
@@ -122,12 +170,16 @@ class AgreedLayoutSourceTests(unittest.TestCase):
         self.header = HEADER_SOURCE.read_text()
         self.shim = WM_SHIM.read_text()
 
-    def test_rail_is_two_panels_tools_over_modifiers(self) -> None:
+    def test_rail_is_one_tool_panel_and_modifiers_live_on_the_quick_bar(self) -> None:
+        # Device feedback on #5: Shift, Ctrl, Alt and Cmd showed twice, on the rail and the bar.
         self.assertIn('@"blender_rail_tools"', self.belt)
-        self.assertIn('@"blender_rail_modifiers"', self.belt)
+        self.assertNotIn('@"blender_rail_modifiers"', self.belt)
+        self.assertNotIn("modifier_panel_", self.belt)
+        self.assertNotIn("rail_modifier_keys_", self.belt)
         self.assertIn("- (void)setTools:(const GHOST_IOSToolItem *)tools", self.belt)
-        # The tool panel fills the height above the modifier panel.
-        self.assertIn("[tool_panel_.bottomAnchor constraintEqualToAnchor:modifier_panel_.topAnchor", self.belt)
+        # The tool panel runs the full height of the canvas.
+        self.assertIn("[tool_panel_.bottomAnchor constraintEqualToAnchor:input_view.bottomAnchor", self.belt)
+        self.assertIn("quick_modifier_keys_ = [GHOST_IOSBelt_modifierKeys(delegate, @\"\") retain];", self.belt)
         # The old single bar's handle, corners and divider line are gone.
         for gone in ("GHOST_IOSModifierBeltCorner", "handle_icon_", "separator_", "UISwipeGestureRecognizer"):
             self.assertNotIn(gone, self.belt)
