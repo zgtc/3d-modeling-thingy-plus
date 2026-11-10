@@ -76,7 +76,13 @@ struct ButtonItem;
   } \
   (void)0
 
-#define UI_ITEM_PROP_SEP_DIVIDE 0.4f
+/* Share of a property row taken by its label. Touch platforms, whose larger text needs more room
+ * for the label, can set their own. */
+#ifdef BLENDER_PLATFORM_PROP_SEP_DIVIDE
+#  define UI_ITEM_PROP_SEP_DIVIDE BLENDER_PLATFORM_PROP_SEP_DIVIDE
+#else
+#  define UI_ITEM_PROP_SEP_DIVIDE 0.4f
+#endif
 
 /* uiLayoutRoot */
 

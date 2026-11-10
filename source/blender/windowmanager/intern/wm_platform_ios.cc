@@ -41,6 +41,7 @@
 #include "GHOST_IOSInteraction.hh"
 
 #include "wm_event_system.hh"
+#include "wm_ios_layout.hh"
 #include "wm_ios_status_keys.hh"
 #include "wm_window.hh"
 
@@ -483,16 +484,12 @@ static void wm_ios_command_property(bContext *C,
 }
 
 /** Spacing in #uiStyle before the touch preset changed it, to restore it exactly. */
-struct WMIOSStyleSpacing {
-  bool saved = false;
-  short columnspace, templatespace, boxspace, buttonspacex, buttonspacey, panelspace, panelouter;
-  float widget_points, grouplabel_points, paneltitle_points;
-};
 static WMIOSStyleSpacing wm_ios_default_spacing;
 
 /**
- * Touch spacing preset: more room between buttons, rows and panels, so a finger lands on the
- * intended one, and slightly larger text. The global UI scale is left alone.
+ * Touch spacing preset: more room beside buttons so a finger lands on the intended one, a little
+ * more between rows and panels, and slightly larger text (#wm_ios_touch_spacing). The global UI
+ * scale is left alone.
  */
 static void wm_ios_set_touch_spacing(const bool enabled)
 {
@@ -514,18 +511,17 @@ static void wm_ios_set_touch_spacing(const bool enabled)
                style->grouplabel.points,
                style->paneltitle.points};
   }
-  const float factor = enabled ? 2.0f : 1.0f;
-  style->columnspace = short(spacing.columnspace * factor);
-  style->templatespace = short(spacing.templatespace * factor);
-  style->boxspace = short(spacing.boxspace * factor);
-  style->buttonspacex = short(spacing.buttonspacex * factor);
-  style->buttonspacey = short(spacing.buttonspacey * factor + (enabled ? 4 : 0));
-  style->panelspace = short(spacing.panelspace * factor);
-  style->panelouter = short(spacing.panelouter * factor);
-  const float text_factor = enabled ? 1.15f : 1.0f;
-  style->widget.points = spacing.widget_points * text_factor;
-  style->grouplabel.points = spacing.grouplabel_points * text_factor;
-  style->paneltitle.points = spacing.paneltitle_points * text_factor;
+  const WMIOSStyleSpacing touch = wm_ios_touch_spacing(spacing, enabled);
+  style->columnspace = touch.columnspace;
+  style->templatespace = touch.templatespace;
+  style->boxspace = touch.boxspace;
+  style->buttonspacex = touch.buttonspacex;
+  style->buttonspacey = touch.buttonspacey;
+  style->panelspace = touch.panelspace;
+  style->panelouter = touch.panelouter;
+  style->widget.points = touch.widget_points;
+  style->grouplabel.points = touch.grouplabel_points;
+  style->paneltitle.points = touch.paneltitle_points;
   WM_main_add_notifier(NC_WINDOW, nullptr);
 }
 
@@ -733,9 +729,8 @@ void wm_ios_touch_channel_update(bContext *C)
  * \{ */
 
 /**
- * Give the Outliner and Properties column on the right more room, so item names are not cut
- * off at the touch UI scale. The column grows by a third, to at least a quarter of the screen,
- * and never past half of it.
+ * Give the Outliner and Properties column on the right more room, so item names and property
+ * labels are not cut off at the touch UI scale (#wm_ios_right_column_left).
  */
 static void wm_ios_widen_right_column(bScreen &screen)
 {
@@ -752,9 +747,7 @@ static void wm_ios_widen_right_column(bScreen &screen)
   if (column_left <= 0 || column_left >= screen_right) {
     return;
   }
-  const int width = screen_right - column_left;
-  const int wanted = std::max(width * 4 / 3, screen_right / 4);
-  const int new_left = std::max(screen_right - wanted, screen_right / 2);
+  const int new_left = wm_ios_right_column_left(screen_right, column_left);
   if (new_left >= column_left) {
     return;
   }
@@ -763,6 +756,45 @@ static void wm_ios_widen_right_column(bScreen &screen)
     if (vert.vec.x == column_left) {
       vert.vec.x = short(new_left);
     }
+  }
+}
+
+/**
+ * Give the Outliner at the top of the right column at least two fifths of the column's height
+ * (#wm_ios_outliner_bottom), so more of the scene's hierarchy shows at once.
+ */
+static void wm_ios_grow_outliner(bScreen &screen)
+{
+  int screen_right = 0;
+  for (const ScrVert &vert : screen.vertbase) {
+    screen_right = std::max(screen_right, int(vert.vec.x));
+  }
+  for (ScrArea &outliner : screen.areabase) {
+    if (outliner.spacetype != SPACE_OUTLINER || outliner.v4->vec.x != screen_right) {
+      continue;
+    }
+    /* The editor directly below it, sharing its bottom edge. */
+    const int left = outliner.v1->vec.x;
+    const int bottom = outliner.v1->vec.y;
+    for (const ScrArea &below : screen.areabase) {
+      if (&below == &outliner || below.v2->vec.y != bottom || below.v1->vec.x != left ||
+          below.v4->vec.x != screen_right)
+      {
+        continue;
+      }
+      const int new_bottom = wm_ios_outliner_bottom(
+          outliner.v2->vec.y, below.v1->vec.y, bottom);
+      if (new_bottom >= bottom || new_bottom <= below.v1->vec.y + HEADERY * 2) {
+        break;
+      }
+      for (ScrVert &vert : screen.vertbase) {
+        if (vert.vec.y == bottom && vert.vec.x >= left && vert.vec.x <= screen_right) {
+          vert.vec.y = short(new_bottom);
+        }
+      }
+      break;
+    }
+    break;
   }
 }
 
@@ -795,6 +827,7 @@ void wm_ios_update_startup_defaults(Main *bmain, const char * /*app_template*/)
 {
   for (bScreen &screen : bmain->screens) {
     wm_ios_widen_right_column(screen);
+    wm_ios_grow_outliner(screen);
     wm_ios_collapse_timeline(screen);
   }
 }

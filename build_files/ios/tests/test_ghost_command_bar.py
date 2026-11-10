@@ -412,8 +412,8 @@ class TouchLayoutDefaultsTests(unittest.TestCase):
         column = column[: column.index("\n}\n")]
         self.assertIn("SPACE_OUTLINER", column)
         self.assertIn("SPACE_PROPERTIES", column)
-        # Never more than half the screen, so the viewport stays the main area.
-        self.assertIn("screen_right / 2", column)
+        # The width rule lives in wm_ios_layout.hh (at most 45%, see test_wm_ios_layout).
+        self.assertIn("wm_ios_right_column_left(screen_right, column_left)", column)
         timeline = shim[shim.index("static void wm_ios_collapse_timeline(") :]
         timeline = timeline[: timeline.index("\n}\n")]
         self.assertIn("SACTCONT_TIMELINE", timeline)
