@@ -235,7 +235,9 @@ class AgreedLayoutSourceTests(unittest.TestCase):
         finder = self.shim[self.shim.index("static ScrArea *wm_ios_bottom_timeline(") :]
         self.assertIn("SACTCONT_TIMELINE", finder[: finder.index("\n}\n")])
         self.assertIn("ED_area_headersize()", timeline)
-        self.assertIn("do_refresh = true", timeline)
+        self.assertIn("wm_ios_resize_timeline(", timeline)
+        resize = self.shim[self.shim.index("static void wm_ios_resize_timeline(") :]
+        self.assertIn("do_refresh = true", resize[: resize.index("\n}\n")])
         self.assertIn("context.timeline_", self.shim)
 
 
@@ -281,3 +283,55 @@ class HeaderActionTests(unittest.TestCase):
         handle = handle[: handle.index("\n}\n")]
         self.assertIn("GHOST_IOSHeaderAction_command(", handle)
         self.assertIn("[self queue:command];", handle)
+
+
+class DividerTimelineTests(unittest.TestCase):
+    """Item 13 of the device feedback on #5: the divider above the quick bar resizes Blender's
+    timeline too, not only the quick bar."""
+
+    def test_divider_drag_resizes_the_timeline(self) -> None:
+        run_harness(
+            self,
+            """
+            /* Timeline 300 px high, header 60 px, 2x screen. Dragging 50 pt up shrinks it by
+             * 100 px; dragging down grows it. */
+            CHECK(GHOST_IOSDivider_timelineHeight(300, 61, 50.0, 2.0) == 200);
+            CHECK(GHOST_IOSDivider_timelineHeight(300, 61, -40.0, 2.0) == 380);
+            /* It never shrinks past its header row. */
+            CHECK(GHOST_IOSDivider_timelineHeight(300, 61, 500.0, 2.0) == 61);
+            char command[GHOST_IOS_COMMAND_MAX];
+            CHECK(GHOST_IOSCommand_format(command, "ios.timeline", "height", "200"));
+            CHECK(std::strcmp(command, "ios.timeline\\nheight=200") == 0);
+            GHOST_IOSInteractionContext a, b;
+            b.timeline_height = 200;
+            CHECK(!(a == b));
+            """,
+        )
+
+    def test_divider_reports_drags_and_the_window_queues_the_height(self) -> None:
+        belt = BELT_SOURCE.read_text()
+        drag = belt[belt.index("- (void)handleDivider:(UIPanGestureRecognizer *)sender") :]
+        drag = drag[: drag.index("\n}\n")]
+        self.assertIn("[delegate_ quickBarDivider:sender.state dragUp:-dy];", drag)
+        header = (GHOST_INTERN / "GHOST_IOSModifierBelt.hh").read_text()
+        self.assertIn("- (void)quickBarDivider:(UIGestureRecognizerState)state dragUp:(CGFloat)points;",
+                      header)
+        window = WINDOW_SOURCE.read_text()
+        handler = window[window.index("- (void)quickBarDivider:(UIGestureRecognizerState)state dragUp:(CGFloat)points\n{") :]
+        handler = handler[: handler.index("\n}\n")]
+        for needle in ("interaction_context.timeline_height", "GHOST_IOSDivider_timelineHeight(",
+                       '"ios.timeline", "height"', "[self queueCommand:command];",
+                       "touch_settings.timeline_minimized =", "GHOST_IOSTouchSettings_save(touch_settings);"):
+            self.assertIn(needle, handler)
+
+    def test_shim_sets_the_timeline_height(self) -> None:
+        shim = WM_SHIM.read_text()
+        builtin = shim[shim.index("static bool wm_ios_run_builtin(") :]
+        builtin = builtin[: builtin.index("\n}\n")]
+        self.assertIn('STREQ(name, "height")', builtin)
+        self.assertIn("wm_ios_set_timeline_height(", builtin)
+        setter = shim[shim.index("static void wm_ios_set_timeline_height(") :]
+        setter = setter[: setter.index("\n}\n")]
+        self.assertIn("ED_area_headersize()", setter)
+        self.assertIn("wm_ios_resize_timeline(", setter)
+        self.assertIn("context.timeline_height =", shim)

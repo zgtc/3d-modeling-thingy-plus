@@ -152,3 +152,54 @@ class OutlinerHighlightTests(unittest.TestCase):
         # Active: a solid colour fill with the same outline.
         self.assertIn("&rect, col_active, nullptr, 1.0f, col_active_outline, outline_width, radius);",
                       active)
+
+
+class FullHeightColumnTests(unittest.TestCase):
+    """Item 12 of the device feedback on #5: the Outliner and Properties column runs the full
+    height of the screen, past the timeline, which ends where the column begins."""
+
+    def test_column_takes_the_timelines_right_end(self) -> None:
+        run_harness(self, """
+            struct Vec { short x, y; };
+            struct Vert { Vec vec; };
+            struct Area { Vert *v1, *v2, *v3, *v4; };
+            /* A 1000 x 800 screen: viewport over a timeline 100 high, column from x=600. */
+            Vert bl{{0, 0}}, br{{1000, 0}}, tl_top{{0, 100}}, a{{600, 100}}, b{{1000, 100}};
+            Vert col_top{{600, 800}}, right_top{{1000, 800}};
+            Area timeline{&bl, &tl_top, &b, &br};
+            Area column{&a, &col_top, &right_top, &b};
+            Vert added{{-1, -1}};
+            int adds = 0;
+            const bool changed = wm_ios_column_past_timeline(timeline, column, [&](short x, short y) {
+              adds++;
+              added.vec = {x, y};
+              return &added;
+            });
+            CHECK(changed && adds == 1);
+            /* The new corner sits below the column's left edge, on the bottom of the screen. */
+            CHECK(added.vec.x == 600 && added.vec.y == 0);
+            /* The timeline now ends at the column. */
+            CHECK(timeline.v3 == &a && timeline.v4 == &added);
+            CHECK(timeline.v1 == &bl && timeline.v2 == &tl_top);
+            /* The column reaches the bottom of the screen. */
+            CHECK(column.v1 == &added && column.v4 == &br);
+            CHECK(column.v2 == &col_top && column.v3 == &right_top);
+            /* Run again: nothing left to change. */
+            CHECK(!wm_ios_column_past_timeline(timeline, column, [&](short, short) { return &added; }));
+        """)
+
+    def test_startup_layout_extends_the_column_before_collapsing_the_timeline(self) -> None:
+        shim = SHIM.read_text()
+        column = shim[shim.index("static void wm_ios_full_height_column(") :]
+        column = column[: column.index("\n}\n")]
+        edge = shim[shim.index("static void wm_ios_ensure_edge(") :]
+        self.assertIn("BKE_screen_find_edge(", edge[: edge.index("\n}\n")])
+        for needle in ("SACTCONT_TIMELINE", "wm_ios_column_past_timeline(", "wm_ios_ensure_edge(",
+                       "BKE_screen_remove_unused_scredges(&screen);",
+                       "BKE_screen_remove_unused_scrverts(&screen);"):
+            self.assertIn(needle, column)
+        update = shim[shim.index("void wm_ios_update_startup_defaults(") :]
+        update = update[: update.index("\n}\n")]
+        order = [update.index(name) for name in ("wm_ios_widen_right_column(", "wm_ios_grow_outliner(",
+                                                  "wm_ios_full_height_column(", "wm_ios_collapse_timeline(")]
+        self.assertEqual(order, sorted(order))

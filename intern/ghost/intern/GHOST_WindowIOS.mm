@@ -411,6 +411,9 @@ typedef struct UserInputEvent {
   int rail_tools_count;
   /* Minimize control at the right end of the timeline. */
   UIButton *timeline_button;
+  /** Timeline height when the quick bar's divider drag began, and the last height sent. */
+  int timeline_drag_start;
+  int timeline_drag_sent;
   /* The squeeze palette's Tools page, and where the palette was opened. */
   bool palette_tools_page;
   CGPoint palette_point;
@@ -1561,6 +1564,45 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   GHOST_IOSStyle_selectionFeedback();
   [self updateTimelineButton];
   [self applyTimeline];
+}
+
+/* The divider above the quick bar moves with the timeline's bottom edge: dragging it resizes
+ * Blender's timeline, not only the quick bar. */
+- (void)quickBarDivider:(UIGestureRecognizerState)state dragUp:(CGFloat)points
+{
+  if (window == nullptr || !interaction_context.has_timeline) {
+    return;
+  }
+  const int header = std::max(
+      1, interaction_context.timeline_header_bottom - interaction_context.timeline_header_top);
+  if (state == UIGestureRecognizerStateBegan) {
+    timeline_drag_start = interaction_context.timeline_height;
+    timeline_drag_sent = timeline_drag_start;
+    return;
+  }
+  if (state != UIGestureRecognizerStateChanged && state != UIGestureRecognizerStateEnded) {
+    return;
+  }
+  const int height = GHOST_IOSDivider_timelineHeight(
+      timeline_drag_start, header + 1, points, window->getWindowScaleFactor());
+  if (height != timeline_drag_sent) {
+    timeline_drag_sent = height;
+    char value[16];
+    std::snprintf(value, sizeof(value), "%d", height);
+    char command[GHOST_IOS_COMMAND_MAX];
+    if (GHOST_IOSCommand_format(command, "ios.timeline", "height", value)) {
+      [self queueCommand:command];
+    }
+  }
+  if (state == UIGestureRecognizerStateEnded) {
+    /* Dragged down to its header, the timeline counts as minimized, and the reverse. */
+    const bool minimized = height <= header + 2;
+    if (touch_settings.timeline_minimized != minimized) {
+      touch_settings.timeline_minimized = minimized;
+      GHOST_IOSTouchSettings_save(touch_settings);
+      [self updateTimelineButton];
+    }
+  }
 }
 
 /** \} */

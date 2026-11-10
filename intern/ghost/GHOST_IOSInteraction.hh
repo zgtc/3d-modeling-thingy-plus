@@ -103,6 +103,8 @@ struct GHOST_IOSInteractionContext {
   int timeline_right = 0;
   int timeline_header_top = 0;
   int timeline_header_bottom = 0;
+  /** Height of the whole timeline area, in GHOST client pixels. */
+  int timeline_height = 0;
   /**
    * Keyboard shortcuts of the running modal tool, from its modal keymap, in the order its status
    * line lists them. Mouse buttons are left out. The quick bar shows these while the tool runs.
@@ -132,7 +134,8 @@ struct GHOST_IOSInteractionContext {
            sameWorkspaces(other) && has_timeline == other.has_timeline &&
            timeline_right == other.timeline_right &&
            timeline_header_top == other.timeline_header_top &&
-           timeline_header_bottom == other.timeline_header_bottom && sameModalKeys(other);
+           timeline_header_bottom == other.timeline_header_bottom &&
+           timeline_height == other.timeline_height && sameModalKeys(other);
   }
   bool sameWorkspaces(const GHOST_IOSInteractionContext &other) const
   {

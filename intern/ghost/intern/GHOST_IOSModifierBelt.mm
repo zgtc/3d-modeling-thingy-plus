@@ -704,6 +704,8 @@ static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
 - (void)handleDivider:(UIPanGestureRecognizer *)sender
 {
   const CGFloat dy = [sender translationInView:host_].y;
+  /* Blender's timeline follows the divider, see #GHOST_IOSDivider_timelineHeight. */
+  [delegate_ quickBarDivider:sender.state dragUp:-dy];
   switch (sender.state) {
     case UIGestureRecognizerStateBegan:
       divider_drag_start_ = quick_bar_height_.constant;

@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "MEM_guardedalloc.h"
+
 #include "BKE_context.hh"
 #include "BKE_layer.hh"
 #include "BKE_main.hh"
@@ -240,10 +242,31 @@ static void wm_ios_timeline_rect(wmWindow &win, bScreen &screen, GHOST_IOSIntera
   context.timeline_right = x;
   context.timeline_header_top = y_top;
   context.timeline_header_bottom = y_bottom;
+  context.timeline_height = area->v2->vec.y - area->v1->vec.y;
 }
 
 /** Timeline height before it was minimized, in window pixels, to give back when expanded. */
 static int wm_ios_timeline_expanded_height = 0;
+
+/** Move the top edge of the bottom timeline so it is \a target pixels high. */
+static void wm_ios_resize_timeline(bScreen &screen, ScrArea &area, const int target)
+{
+  const int bottom = area.v1->vec.y;
+  const int top = area.v2->vec.y;
+  if (target == top - bottom) {
+    return;
+  }
+  const int new_top = bottom + target;
+  const int left = area.v1->vec.x;
+  const int right = area.v4->vec.x;
+  /* Areas share their corner vertices, so moving the edge resizes the editor above too. */
+  for (ScrVert &vert : screen.vertbase) {
+    if (vert.vec.y == top && vert.vec.x >= left && vert.vec.x <= right) {
+      vert.vec.y = short(new_top);
+    }
+  }
+  screen.do_refresh = true;
+}
 
 /**
  * Minimized, the bottom timeline is only its header row and the 3D Viewport above takes the room;
@@ -273,19 +296,33 @@ static void wm_ios_set_timeline_minimized(wmWindow &win, const bool minimized)
   else {
     target = std::max(wm_ios_timeline_expanded_height, header * 5);
   }
-  if (target == height) {
+  wm_ios_resize_timeline(*screen, *area, target);
+}
+
+/**
+ * Set the bottom timeline's height, from a drag of the divider above the quick bar: at least its
+ * header row, and never more than half the screen so the editors above keep their room.
+ */
+static void wm_ios_set_timeline_height(wmWindow &win, const int height)
+{
+  bScreen *screen = WM_window_get_active_screen(&win);
+  if (screen == nullptr) {
     return;
   }
-  const int new_top = bottom + target;
-  const int left = area->v1->vec.x;
-  const int right = area->v4->vec.x;
-  /* Areas share their corner vertices, so moving the edge resizes the editor above too. */
-  for (ScrVert &vert : screen->vertbase) {
-    if (vert.vec.y == top && vert.vec.x >= left && vert.vec.x <= right) {
-      vert.vec.y = short(new_top);
-    }
+  ScrArea *area = wm_ios_bottom_timeline(*screen);
+  if (area == nullptr || area->v1 == nullptr || area->v2 == nullptr || area->v4 == nullptr) {
+    return;
   }
-  screen->do_refresh = true;
+  int screen_top = 0;
+  for (const ScrVert &vert : screen->vertbase) {
+    screen_top = std::max(screen_top, int(vert.vec.y));
+  }
+  const int header = ED_area_headersize();
+  const int target = std::clamp(height, header + 1, std::max(header + 1, screen_top / 2));
+  if (target > header + 2) {
+    wm_ios_timeline_expanded_height = target;
+  }
+  wm_ios_resize_timeline(*screen, *area, target);
 }
 
 /**
@@ -583,8 +620,13 @@ static bool wm_ios_run_builtin(bContext *C, const char *idname, const char *name
   }
   if (STREQ(idname, "ios.timeline")) {
     if (wmWindow *win = CTX_wm_window(C)) {
-      wm_ios_set_timeline_minimized(
-          *win, name != nullptr && STREQ(name, "minimized") && STREQ(value, "1"));
+      if (name != nullptr && STREQ(name, "height")) {
+        wm_ios_set_timeline_height(*win, std::atoi(value));
+      }
+      else {
+        wm_ios_set_timeline_minimized(
+            *win, name != nullptr && STREQ(name, "minimized") && STREQ(value, "1"));
+      }
     }
     return true;
   }
@@ -798,6 +840,85 @@ static void wm_ios_grow_outliner(bScreen &screen)
   }
 }
 
+/** Add the edge from \a v1 to \a v2 unless the screen has it, marking edges on its border. */
+static void wm_ios_ensure_edge(bScreen &screen,
+                               ScrVert *v1,
+                               ScrVert *v2,
+                               const int screen_right,
+                               const int screen_top)
+{
+  if (BKE_screen_find_edge(&screen, v1, v2) != nullptr) {
+    return;
+  }
+  ScrEdge *edge = MEM_new<ScrEdge>("wm_ios_ensure_edge");
+  BKE_screen_sort_scrvert(&v1, &v2);
+  edge->v1 = v1;
+  edge->v2 = v2;
+  const bool vertical = v1->vec.x == v2->vec.x;
+  edge->border = vertical ? short(ELEM(v1->vec.x, 0, screen_right)) :
+                            short(ELEM(v1->vec.y, 0, screen_top));
+  BLI_addtail(&screen.edgebase, edge);
+}
+
+/**
+ * Let the Outliner and Properties column run the full height of the screen: the timeline along
+ * the bottom stops where the column begins (#wm_ios_column_past_timeline).
+ */
+static void wm_ios_full_height_column(bScreen &screen)
+{
+  int screen_right = 0;
+  int screen_top = 0;
+  for (const ScrVert &vert : screen.vertbase) {
+    screen_right = std::max(screen_right, int(vert.vec.x));
+    screen_top = std::max(screen_top, int(vert.vec.y));
+  }
+  ScrArea *timeline = nullptr;
+  for (ScrArea &area : screen.areabase) {
+    const SpaceAction *saction = area.spacetype == SPACE_ACTION ?
+                                     static_cast<const SpaceAction *>(area.spacedata.first) :
+                                     nullptr;
+    if (saction != nullptr && saction->mode == SACTCONT_TIMELINE && area.v1->vec.y == 0 &&
+        area.v4->vec.x == screen_right)
+    {
+      timeline = &area;
+      break;
+    }
+  }
+  if (timeline == nullptr) {
+    return;
+  }
+  ScrArea *column = nullptr;
+  for (ScrArea &area : screen.areabase) {
+    if (ELEM(area.spacetype, SPACE_OUTLINER, SPACE_PROPERTIES) && area.v4 == timeline->v3 &&
+        area.v1->vec.y == timeline->v2->vec.y)
+    {
+      column = &area;
+      break;
+    }
+  }
+  if (column == nullptr) {
+    return;
+  }
+  const bool changed = wm_ios_column_past_timeline(*timeline, *column, [&](short x, short y) {
+    ScrVert *vert = MEM_new<ScrVert>("wm_ios_full_height_column");
+    vert->vec.x = x;
+    vert->vec.y = y;
+    BLI_addtail(&screen.vertbase, vert);
+    return vert;
+  });
+  if (!changed) {
+    return;
+  }
+  for (ScrArea *area : {timeline, column}) {
+    wm_ios_ensure_edge(screen, area->v1, area->v2, screen_right, screen_top);
+    wm_ios_ensure_edge(screen, area->v2, area->v3, screen_right, screen_top);
+    wm_ios_ensure_edge(screen, area->v3, area->v4, screen_right, screen_top);
+    wm_ios_ensure_edge(screen, area->v4, area->v1, screen_right, screen_top);
+  }
+  BKE_screen_remove_unused_scredges(&screen);
+  BKE_screen_remove_unused_scrverts(&screen);
+}
+
 /** Shrink a timeline along the bottom of the screen to its header: a single row of controls. */
 static void wm_ios_collapse_timeline(bScreen &screen)
 {
@@ -828,6 +949,7 @@ void wm_ios_update_startup_defaults(Main *bmain, const char * /*app_template*/)
   for (bScreen &screen : bmain->screens) {
     wm_ios_widen_right_column(screen);
     wm_ios_grow_outliner(screen);
+    wm_ios_full_height_column(screen);
     wm_ios_collapse_timeline(screen);
   }
 }

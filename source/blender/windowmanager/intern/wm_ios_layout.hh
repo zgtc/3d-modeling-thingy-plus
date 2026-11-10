@@ -71,3 +71,32 @@ inline int wm_ios_outliner_bottom(const int column_top,
   const int wanted = column_top - (column_top - column_bottom) * 2 / 5;
   return std::min(outliner_bottom, wanted);
 }
+
+/**
+ * Run the right column past the timeline along the bottom: the timeline ends where the column
+ * begins, and the column's bottom editor reaches the bottom of the screen.
+ *
+ * \a timeline is the bottom area spanning the screen's width; \a column the area resting on it
+ * at the right. Areas list their corners bottom-left, top-left, top-right, bottom-right (`v1` to
+ * `v4`), and neighbours share corner vertices. \a add_vert(x, y) creates the one new corner, below
+ * the column's left edge. The caller adds the edges for the new sides and drops the unused ones.
+ * Returns false, changing nothing, when the two areas do not meet that way.
+ */
+template<typename AreaT, typename AddVert>
+inline bool wm_ios_column_past_timeline(AreaT &timeline, AreaT &column, AddVert add_vert)
+{
+  auto *corner = column.v1;     /* Column's bottom-left, on the timeline's top edge. */
+  auto *shared = column.v4;     /* Column's bottom-right, the timeline's top-right. */
+  auto *bottom_right = timeline.v4;
+  if (timeline.v3 != shared || corner->vec.y != shared->vec.y ||
+      timeline.v1->vec.x >= corner->vec.x || corner->vec.x >= shared->vec.x)
+  {
+    return false;
+  }
+  auto *bottom = add_vert(corner->vec.x, timeline.v1->vec.y);
+  timeline.v3 = corner;
+  timeline.v4 = bottom;
+  column.v1 = bottom;
+  column.v4 = bottom_right;
+  return true;
+}

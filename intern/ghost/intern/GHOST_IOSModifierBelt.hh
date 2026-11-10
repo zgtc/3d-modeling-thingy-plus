@@ -53,6 +53,22 @@ inline void GHOST_IOSRail_canvasInsets(const bool quick_bar_visible,
                                   0.0;
 }
 
+/**
+ * The timeline's height after the divider above the quick bar was dragged \a drag_up points up
+ * from where the timeline was \a timeline_start pixels high. The divider moves with the
+ * timeline's bottom edge, so the timeline gives or takes the whole drag; it never gets shorter
+ * than \a timeline_min, its header row.
+ */
+inline int GHOST_IOSDivider_timelineHeight(const int timeline_start,
+                                           const int timeline_min,
+                                           const double drag_up,
+                                           const double scale)
+{
+  const double height = double(timeline_start) - drag_up * scale;
+  const int rounded = int(height + (height < 0.0 ? -0.5 : 0.5));
+  return rounded < timeline_min ? timeline_min : rounded;
+}
+
 /** Buttons the window still handles, from the menu bar and gestures. */
 enum class GHOST_IOSBarAction : uint8_t {
   /** Toggle Focus mode for the editor under the pointer. */
@@ -67,6 +83,7 @@ enum class GHOST_IOSBarAction : uint8_t {
 
 #  import <CoreGraphics/CoreGraphics.h>
 #  import <Foundation/Foundation.h>
+#  import <UIKit/UIGestureRecognizer.h>
 
 @class UIMenu;
 @class UIView;
@@ -94,6 +111,8 @@ enum class GHOST_IOSBarAction : uint8_t {
 - (void)commandBarEditKey:(int)index;
 /** Tool \a index of those passed to #GHOST_IOSModifierBelt_setTools was tapped. */
 - (void)commandBarTool:(int)index;
+/** The divider above the quick bar is being dragged, \a points up from where it started. */
+- (void)quickBarDivider:(UIGestureRecognizerState)state dragUp:(CGFloat)points;
 @end
 
 /**
