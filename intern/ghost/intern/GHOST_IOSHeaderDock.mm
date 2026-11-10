@@ -4,13 +4,12 @@
 
 /** \file
  * \ingroup GHOST
- * The iPad's native header and tool dock.
+ * The iPad's native header.
  *
  * The header sits above Blender's canvas in place of Blender's top bar: one menu button with
  * Blender's top bar menus and the menus of the editor under the pointer, and the workspace tabs
- * in a strip that scrolls sideways. The mode stays in the 3D Viewport's own mode menu. The dock sits
- * below the canvas with the tools of the current 3D Viewport mode, so the tool shelf on the left
- * of the viewport can stay hidden. The canvas is inset for both, so they never cover it.
+ * in a strip that scrolls sideways. The mode stays in the 3D Viewport's own mode menu, and the
+ * tools are on the left rail (#GHOST_IOSModifierBelt). The canvas is inset so it is never covered.
  */
 
 #import <UIKit/UIKit.h>
@@ -24,7 +23,6 @@
 
 static constexpr CGFloat padding = 8.0f;
 static constexpr CGFloat tab_height = 32.0f;
-static constexpr CGFloat tool_width = 64.0f;
 
 @interface GHOSTIOSHeaderDock : NSObject
 {
@@ -37,15 +35,8 @@ static constexpr CGFloat tool_width = 64.0f;
   UIScrollView *tab_scroll_;
   UIStackView *tab_stack_;
 
-  UIView *dock_;
-  UIScrollView *tool_scroll_;
-  UIStackView *tool_stack_;
-  NSMutableArray<UIButton *> *tool_buttons_;
 
   GHOST_IOSInteractionContext context_;
-  /** Tools last shown; kept while the pointer is outside the 3D Viewport. */
-  const GHOST_IOSToolItem *tools_;
-  int tools_count_;
 }
 - (instancetype)initWithCanvas:(UIView *)canvas delegate:(id<GHOSTIOSHeaderDockDelegate>)delegate;
 - (void)teardown;
@@ -83,9 +74,6 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
   canvas_ = canvas;
   delegate_ = delegate;
   host_ = (id<GHOSTIOSCanvasInsetting>)host;
-  tools_ = nullptr;
-  tools_count_ = 0;
-  tool_buttons_ = [[NSMutableArray alloc] init];
 
   /* Header. */
   header_ = GHOST_IOSHeaderDock_bar(host, @"blender_native_header");
@@ -120,18 +108,6 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
   [tab_scroll_ addSubview:tab_stack_];
   [header_ addSubview:tab_scroll_];
 
-  /* Dock. */
-  dock_ = GHOST_IOSHeaderDock_bar(host, @"blender_tool_dock");
-  tool_scroll_ = [[UIScrollView alloc] init];
-  tool_scroll_.translatesAutoresizingMaskIntoConstraints = NO;
-  tool_scroll_.showsHorizontalScrollIndicator = NO;
-  tool_scroll_.alwaysBounceHorizontal = YES;
-  tool_stack_ = [[UIStackView alloc] init];
-  tool_stack_.translatesAutoresizingMaskIntoConstraints = NO;
-  tool_stack_.axis = UILayoutConstraintAxisHorizontal;
-  tool_stack_.spacing = 2.0f;
-  [tool_scroll_ addSubview:tool_stack_];
-  [dock_ addSubview:tool_scroll_];
 
   UILayoutGuide *safe = host.safeAreaLayoutGuide;
   [NSLayoutConstraint activateConstraints:@[
@@ -158,26 +134,9 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
     [tab_stack_.bottomAnchor constraintEqualToAnchor:tab_scroll_.contentLayoutGuide.bottomAnchor],
     [tab_stack_.heightAnchor constraintEqualToAnchor:tab_scroll_.frameLayoutGuide.heightAnchor],
 
-    /* The dock covers the home indicator area too. */
-    [dock_.bottomAnchor constraintEqualToAnchor:host.bottomAnchor],
-    [dock_.leadingAnchor constraintEqualToAnchor:host.leadingAnchor],
-    [dock_.trailingAnchor constraintEqualToAnchor:host.trailingAnchor],
-    [dock_.topAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-GHOST_IOS_DOCK_HEIGHT],
-    [tool_scroll_.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:padding],
-    [tool_scroll_.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-padding],
-    [tool_scroll_.topAnchor constraintEqualToAnchor:dock_.topAnchor constant:4.0f],
-    [tool_scroll_.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-4.0f],
-    [tool_stack_.leadingAnchor
-        constraintEqualToAnchor:tool_scroll_.contentLayoutGuide.leadingAnchor],
-    [tool_stack_.trailingAnchor
-        constraintEqualToAnchor:tool_scroll_.contentLayoutGuide.trailingAnchor],
-    [tool_stack_.topAnchor constraintEqualToAnchor:tool_scroll_.contentLayoutGuide.topAnchor],
-    [tool_stack_.bottomAnchor
-        constraintEqualToAnchor:tool_scroll_.contentLayoutGuide.bottomAnchor],
-    [tool_stack_.heightAnchor constraintEqualToAnchor:tool_scroll_.frameLayoutGuide.heightAnchor],
   ]];
 
-  [host_ setCanvasInsetsTop:GHOST_IOS_HEADER_HEIGHT bottom:GHOST_IOS_DOCK_HEIGHT];
+  [host_ setCanvasInsetTop:GHOST_IOS_HEADER_HEIGHT];
   [self setContext:GHOST_IOSInteractionContext()];
   return self;
 }
@@ -185,17 +144,13 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
 - (void)teardown
 {
   menu_button_.menu = nil;
-  for (UIButton *button in tool_buttons_) {
-    [button removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
-  }
   for (UIView *view in tab_stack_.arrangedSubviews) {
     if ([view isKindOfClass:[UIButton class]]) {
       [(UIButton *)view removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
     }
   }
-  [host_ setCanvasInsetsTop:0.0f bottom:0.0f];
+  [host_ setCanvasInsetTop:0.0f];
   [header_ removeFromSuperview];
-  [dock_ removeFromSuperview];
   delegate_ = nil;
   host_ = nil;
 }
@@ -206,16 +161,12 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
   [menu_button_ release];
   [tab_scroll_ release];
   [tab_stack_ release];
-  [dock_ release];
-  [tool_scroll_ release];
-  [tool_stack_ release];
-  [tool_buttons_ release];
   [super dealloc];
 }
 
 - (BOOL)containsView:(UIView *)view
 {
-  return [view isDescendantOfView:header_] || [view isDescendantOfView:dock_];
+  return [view isDescendantOfView:header_];
 }
 
 - (void)queue:(const char *)command
@@ -333,73 +284,6 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
 
 /** \} */
 
-/* -------------------------------------------------------------------- */
-/** \name Tool dock
- * \{ */
-
-- (void)handleTool:(UIButton *)sender
-{
-  const int index = int(sender.tag);
-  if (tools_ == nullptr || index < 0 || index >= tools_count_) {
-    return;
-  }
-  char command[GHOST_IOS_COMMAND_MAX];
-  if (GHOST_IOSTool_command(tools_[index], command)) {
-    GHOST_IOSStyle_selectionFeedback();
-    [self queue:command];
-  }
-}
-
-- (void)rebuildTools
-{
-  for (UIButton *button in tool_buttons_) {
-    [button removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
-    [tool_stack_ removeArrangedSubview:button];
-    [button removeFromSuperview];
-  }
-  [tool_buttons_ removeAllObjects];
-  for (int i = 0; i < tools_count_; i++) {
-    UIButtonConfiguration *configuration = [UIButtonConfiguration plainButtonConfiguration];
-    configuration.image = GHOST_IOSStyle_symbol([NSString stringWithUTF8String:tools_[i].symbol],
-                                                20.0);
-    configuration.title = [NSString stringWithUTF8String:tools_[i].title];
-    configuration.imagePlacement = NSDirectionalRectEdgeTop;
-    configuration.imagePadding = 3.0f;
-    configuration.baseForegroundColor = UIColor.whiteColor;
-    configuration.titleTextAttributesTransformer = ^(NSDictionary *attributes) {
-      NSMutableDictionary *result = [[attributes mutableCopy] autorelease];
-      result[NSFontAttributeName] = [UIFont systemFontOfSize:10.0f weight:UIFontWeightSemibold];
-      return (NSDictionary *)result;
-    };
-    UIButton *button = [UIButton buttonWithConfiguration:configuration primaryAction:nil];
-    button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.tag = i;
-    button.layer.cornerRadius = 12.0f;
-    button.layer.cornerCurve = kCACornerCurveContinuous;
-    button.accessibilityIdentifier = [NSString stringWithFormat:@"blender_dock_tool_%d", i];
-    [button.widthAnchor constraintEqualToConstant:tool_width].active = YES;
-    [button addTarget:self
-                  action:@selector(handleTool:)
-        forControlEvents:UIControlEventTouchUpInside];
-    [tool_buttons_ addObject:button];
-    [tool_stack_ addArrangedSubview:button];
-  }
-}
-
-- (void)highlightActiveTool:(const char *)tool
-{
-  const int active = GHOST_IOSDock_activeIndex(tools_, tools_count_, tool);
-  for (int i = 0; i < int(tool_buttons_.count); i++) {
-    UIButton *button = tool_buttons_[i];
-    button.backgroundColor = i == active ?
-                                 [GHOST_IOSStyle_accentColor() colorWithAlphaComponent:0.85f] :
-                                 UIColor.clearColor;
-    button.selected = i == active;
-  }
-}
-
-/** \} */
-
 - (void)setContext:(const GHOST_IOSInteractionContext &)context
 {
   const bool tabs_changed = !context.sameWorkspaces(context_) ||
@@ -408,20 +292,6 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
   if (tabs_changed) {
     [self rebuildTabs:context];
   }
-
-  /* The dock follows the 3D Viewport; elsewhere it keeps its tools. */
-  if (context.editor != GHOST_IOSEditor::View3D) {
-    return;
-  }
-
-  int count = 0;
-  const GHOST_IOSToolItem *tools = GHOST_IOSDock_tools(context, &count);
-  if (tools != tools_) {
-    tools_ = tools;
-    tools_count_ = count;
-    [self rebuildTools];
-  }
-  [self highlightActiveTool:context.tool];
 }
 
 @end

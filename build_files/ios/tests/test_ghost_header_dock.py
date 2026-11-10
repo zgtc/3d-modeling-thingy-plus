@@ -176,8 +176,7 @@ class HeaderDockSourceTests(unittest.TestCase):
         self.assertIn("menu_button_.trailingAnchor", tabs)
         self.assertIn("tab_scroll_.showsHorizontalScrollIndicator = NO;", self.views)
         self.assertIn("scrollRectToVisible:", self.views)
-        self.assertIn("[host_ setCanvasInsetsTop:GHOST_IOS_HEADER_HEIGHT bottom:GHOST_IOS_DOCK_HEIGHT];",
-                      self.views)
+        self.assertIn("[host_ setCanvasInsetTop:GHOST_IOS_HEADER_HEIGHT];", self.views)
         self.assertNotIn("UIGlassEffect", self.views)
         self.assertNotIn("contentEdgeInsets", self.views)
 
@@ -220,8 +219,9 @@ class HeaderDockSourceTests(unittest.TestCase):
         self.assertIn("self.safeAreaInsets.bottom", layout)
         self.assertLess(layout.index("canvas_.frame ="), layout.index("[super layoutSubviews];"))
         belt = BELT_SOURCE.read_text()
-        self.assertIn("vertical_guide.topAnchor", belt)
-        self.assertIn("vertical_guide.bottomAnchor", belt)
+        self.assertIn("UILayoutGuide *safe = host_.safeAreaLayoutGuide;", belt)
+        self.assertIn("[tool_panel_.topAnchor constraintEqualToAnchor:input_view.topAnchor", belt)
+        self.assertIn("[quick_bar_.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor", belt)
 
     def test_squeeze_palette_has_a_tools_page(self) -> None:
         palette = PALETTE_SOURCE.read_text()

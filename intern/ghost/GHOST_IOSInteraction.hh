@@ -74,6 +74,14 @@ struct GHOST_IOSInteractionContext {
   char workspaces[GHOST_IOS_WORKSPACE_MAX][GHOST_IOS_WORKSPACE_NAME_MAX] = {};
   int workspaces_num = 0;
   int active_workspace = -1;
+  /**
+   * The timeline along the bottom, if any: its right edge and the top and bottom of its header
+   * row, in GHOST client pixels. The minimize control sits at that right edge.
+   */
+  bool has_timeline = false;
+  int timeline_right = 0;
+  int timeline_header_top = 0;
+  int timeline_header_bottom = 0;
 
   bool operator==(const GHOST_IOSInteractionContext &other) const
   {
@@ -81,7 +89,10 @@ struct GHOST_IOSInteractionContext {
            over_main_region == other.over_main_region &&
            std::strcmp(modal_operator, other.modal_operator) == 0 &&
            std::strcmp(tool, other.tool) == 0 && sameResizeEdges(other) &&
-           sameWorkspaces(other);
+           sameWorkspaces(other) && has_timeline == other.has_timeline &&
+           timeline_right == other.timeline_right &&
+           timeline_header_top == other.timeline_header_top &&
+           timeline_header_bottom == other.timeline_header_bottom;
   }
   bool sameWorkspaces(const GHOST_IOSInteractionContext &other) const
   {
@@ -122,6 +133,8 @@ struct GHOST_IOSInteractionContext {
  * - `ios.open_editor` with `space=PROPERTIES` or `space=OUTLINER` opens a floating editor.
  * - `ios.touch_spacing` with `enabled=1` or `enabled=0` sets the touch spacing preset.
  * - `ios.workspace` with `name=<workspace>` makes that workspace active.
+ * - `ios.timeline` with `minimized=1` or `minimized=0` shrinks the bottom timeline to its header
+ *   or gives it back a few rows.
  * - `ios.native_chrome` with `enabled=1` hides Blender's top bar for the native header, and
  *   hides the 3D Viewport tool shelf once, for the native tool dock.
  */

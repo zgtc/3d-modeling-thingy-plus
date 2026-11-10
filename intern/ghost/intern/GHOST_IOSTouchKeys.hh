@@ -247,13 +247,14 @@ struct GHOST_IOSBarKey {
 
 constexpr int GHOST_IOS_BAR_KEY_MAX = 6;
 
+/* In the order the agreed layout shows them on the quick bar. */
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_OBJECT[] = {
-    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
-    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
-    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r")},
-    {"S", GHOST_IOS_KEY_TEXT(GHOST_kKeyS, "s")},
-    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
     {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
+    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
+    {"S", GHOST_IOS_KEY_TEXT(GHOST_kKeyS, "s")},
+    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r")},
+    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
 };
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_EDIT[] = {

@@ -404,8 +404,13 @@ typedef struct UserInputEvent {
   NSObject *modifier_belt;
   GHOST_IOSModifierLatch *modifier_latch;
 
-  /* Native header and tool dock in place of Blender's top bar and tool shelf (iPad). */
+  /* Native header in place of Blender's top bar (iPad). */
   NSObject *header_dock;
+  /* Tools shown on the rail, kept while the pointer is outside the 3D Viewport. */
+  const GHOST_IOSToolItem *rail_tools;
+  int rail_tools_count;
+  /* Minimize control at the right end of the timeline. */
+  UIButton *timeline_button;
   /* The squeeze palette's Tools page, and where the palette was opened. */
   bool palette_tools_page;
   CGPoint palette_point;
@@ -674,6 +679,9 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   resize_handle_dragging = false;
   settings_observer = nil;
   header_dock = nil;
+  rail_tools = nullptr;
+  rail_tools_count = 0;
+  timeline_button = nil;
   palette_tools_page = false;
   palette_point = CGPointZero;
   pencil_palette = nil;
@@ -716,6 +724,12 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   resize_handles = nil;
   GHOST_IOSHeaderDock_destroy(header_dock);
   header_dock = nil;
+  if (timeline_button != nil) {
+    [timeline_button removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
+    [timeline_button removeFromSuperview];
+    [timeline_button release];
+    timeline_button = nil;
+  }
   if (settings_observer != nil) {
     [NSNotificationCenter.defaultCenter removeObserver:settings_observer];
     [settings_observer release];
@@ -882,6 +896,9 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
       char command[GHOST_IOS_COMMAND_MAX];
       GHOST_IOSCommand_format(command, "ios.native_chrome", "enabled", "1");
       [self queueCommand:command];
+      [self createTimelineButton];
+      /* The window manager applies the saved timeline state on its first loop pass. */
+      [self applyTimeline];
     }
   }
   GHOSTUIWindow *ui_window = self;
@@ -939,7 +956,13 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
 {
   const bool spacing_changed = GHOST_IOSSettings_shared().touch.touch_spacing !=
                                touch_settings.touch_spacing;
+  const bool timeline_changed = GHOST_IOSSettings_shared().touch.timeline_minimized !=
+                                touch_settings.timeline_minimized;
   touch_settings = GHOST_IOSSettings_shared().touch;
+  if (timeline_changed && timeline_button != nil) {
+    [self updateTimelineButton];
+    [self applyTimeline];
+  }
   [self updateSettingsMenu];
   [self updateCommandBarForContext];
   if (spacing_changed) {
@@ -1024,6 +1047,15 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
 {
   custom_bar.build(interaction_context, GHOST_IOSSettings_shared());
   GHOST_IOSModifierBelt_setContextKeys(modifier_belt, custom_bar.keys, custom_bar.count);
+  /* The rail's tools follow the 3D Viewport; elsewhere they keep the last viewport's. */
+  if (interaction_context.editor == GHOST_IOSEditor::View3D) {
+    rail_tools = GHOST_IOSDock_tools(interaction_context, &rail_tools_count);
+  }
+  GHOST_IOSModifierBelt_setTools(
+      modifier_belt,
+      rail_tools,
+      rail_tools_count,
+      GHOST_IOSDock_activeIndex(rail_tools, rail_tools_count, interaction_context.tool));
   GHOST_IOSModifierBelt_setKeyPadVisible(modifier_belt,
                                          GHOST_IOSCommandBar_wantsKeyPad(interaction_context));
 }
@@ -1038,6 +1070,7 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   tool_history.update(context);
   [self updateCommandBarForContext];
   GHOST_IOSHeaderDock_setContext(header_dock, context);
+  [self updateTimelineButton];
   if (self.isKeyWindow) {
     GHOST_IOSMenuBar_setContext(context);
   }
@@ -1454,6 +1487,83 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     [self queueCommand:command];
   }
 }
+
+- (void)commandBarTool:(int)index
+{
+  if (rail_tools == nullptr || index < 0 || index >= rail_tools_count) {
+    return;
+  }
+  char command[GHOST_IOS_COMMAND_MAX];
+  if (GHOST_IOSTool_command(rail_tools[index], command)) {
+    [self queueCommand:command];
+  }
+}
+
+/* -------------------------------------------------------------------- */
+/** \name Timeline minimize control
+ * \{ */
+
+- (void)createTimelineButton
+{
+  timeline_button = [[UIButton buttonWithType:UIButtonTypeSystem] retain];
+  timeline_button.tintColor = UIColor.whiteColor;
+  timeline_button.backgroundColor = [UIColor colorWithWhite:0.33f alpha:0.9f];
+  timeline_button.layer.cornerRadius = 8.0f;
+  timeline_button.layer.cornerCurve = kCACornerCurveContinuous;
+  timeline_button.accessibilityIdentifier = @"blender_timeline_minimize";
+  timeline_button.hidden = YES;
+  [timeline_button addTarget:self
+                      action:@selector(toggleTimeline)
+            forControlEvents:UIControlEventTouchUpInside];
+  [window->getView() addSubview:timeline_button];
+  [self updateTimelineButton];
+}
+
+/** Put the control at the right end of the timeline's header row, in view points. */
+- (void)updateTimelineButton
+{
+  if (timeline_button == nil || window == nullptr) {
+    return;
+  }
+  const bool minimized = touch_settings.timeline_minimized;
+  [timeline_button setImage:GHOST_IOSStyle_symbol(minimized ? @"chevron.up" : @"chevron.down",
+                                                  13.0)
+                   forState:UIControlStateNormal];
+  timeline_button.accessibilityLabel = minimized ? @"Expand timeline" : @"Minimize timeline";
+  const GHOST_IOSInteractionContext &context = interaction_context;
+  const double scale = window->getWindowScaleFactor();
+  if (!context.has_timeline || scale <= 0.0) {
+    timeline_button.hidden = YES;
+    return;
+  }
+  const CGFloat size = 28.0f;
+  const CGFloat right = context.timeline_right / scale;
+  const CGFloat middle = (context.timeline_header_top + context.timeline_header_bottom) * 0.5 /
+                         scale;
+  timeline_button.frame = CGRectMake(right - size - 8.0f, middle - size * 0.5f, size, size);
+  timeline_button.hidden = NO;
+  [timeline_button.superview bringSubviewToFront:timeline_button];
+}
+
+- (void)applyTimeline
+{
+  char command[GHOST_IOS_COMMAND_MAX];
+  GHOST_IOSCommand_format(
+      command, "ios.timeline", "minimized", touch_settings.timeline_minimized ? "1" : "0");
+  [self queueCommand:command];
+}
+
+/* Minimized, the timeline is only its header and the 3D Viewport takes the room. */
+- (void)toggleTimeline
+{
+  touch_settings.timeline_minimized = !touch_settings.timeline_minimized;
+  GHOST_IOSTouchSettings_save(touch_settings);
+  GHOST_IOSStyle_selectionFeedback();
+  [self updateTimelineButton];
+  [self applyTimeline];
+}
+
+/** \} */
 
 - (void)commandBarAction:(GHOST_IOSBarAction)action
 {
@@ -1915,6 +2025,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   if (GHOST_IOSResizeHandles_containsView(resize_handles, touch.view)) {
     return NO;
   }
+  if (timeline_button != nil && [touch.view isDescendantOfView:timeline_button]) {
+    return NO;
+  }
   return YES;
 }
 
@@ -1960,7 +2073,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
           GHOST_IOSFileAccess_containsView(file_access_controls, touch.view) ||
           GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view) ||
           GHOST_IOSPencilPalette_containsView(pencil_palette, touch.view) ||
-          GHOST_IOSResizeHandles_containsView(resize_handles, touch.view))
+          GHOST_IOSResizeHandles_containsView(resize_handles, touch.view) ||
+          (timeline_button != nil && [touch.view isDescendantOfView:timeline_button]))
       {
         continue;
       }
@@ -3047,12 +3161,20 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   [self setNeedsLayout];
 }
 
-- (void)setCanvasInsetsTop:(CGFloat)top bottom:(CGFloat)bottom
+- (void)setCanvasInsetTop:(CGFloat)top
 {
-  if (top == top_inset_ && bottom == bottom_inset_) {
+  if (top == top_inset_) {
     return;
   }
   top_inset_ = top;
+  [self setNeedsLayout];
+}
+
+- (void)setCanvasInsetBottom:(CGFloat)bottom
+{
+  if (bottom == bottom_inset_) {
+    return;
+  }
   bottom_inset_ = bottom;
   [self setNeedsLayout];
 }

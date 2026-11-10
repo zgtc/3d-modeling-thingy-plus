@@ -36,6 +36,8 @@
 #include "WM_toolsystem.hh"
 #include "WM_types.hh"
 
+#include "ED_screen.hh"
+
 #include "GHOST_IOSInteraction.hh"
 
 #include "wm_event_system.hh"
@@ -196,6 +198,94 @@ static GHOST_IOSMode wm_ios_mode(const Main &bmain, wmWindow &win, const ScrArea
   return wm_ios_object_mode(BKE_view_layer_active_object_get(view_layer));
 }
 
+/** The timeline along the bottom of \a screen: the lowest timeline editor, or null. */
+static ScrArea *wm_ios_bottom_timeline(bScreen &screen)
+{
+  ScrArea *bottom = nullptr;
+  for (ScrArea &area : screen.areabase) {
+    const SpaceAction *saction = area.spacetype == SPACE_ACTION ?
+                                     static_cast<const SpaceAction *>(area.spacedata.first) :
+                                     nullptr;
+    if (saction != nullptr && saction->mode == SACTCONT_TIMELINE &&
+        (bottom == nullptr || area.totrct.ymin < bottom->totrct.ymin))
+    {
+      bottom = &area;
+    }
+  }
+  return bottom;
+}
+
+/** Where the native minimize control goes: the right end of the timeline's header row. */
+static void wm_ios_timeline_rect(wmWindow &win, bScreen &screen, GHOST_IOSInteractionContext &context)
+{
+  ScrArea *area = wm_ios_bottom_timeline(screen);
+  if (area == nullptr) {
+    return;
+  }
+  const ARegion *header = nullptr;
+  for (const ARegion &region : area->regionbase) {
+    if (region.regiontype == RGN_TYPE_HEADER && region.runtime != nullptr &&
+        region.runtime->visible)
+    {
+      header = &region;
+    }
+  }
+  const rcti &rect = header != nullptr ? header->winrct : area->totrct;
+  int x = area->totrct.xmax, y_top = rect.ymax, x_bottom = x, y_bottom = rect.ymin;
+  wm_cursor_position_to_ghost_client_coords(&win, &x, &y_top);
+  wm_cursor_position_to_ghost_client_coords(&win, &x_bottom, &y_bottom);
+  context.has_timeline = true;
+  context.timeline_right = x;
+  context.timeline_header_top = y_top;
+  context.timeline_header_bottom = y_bottom;
+}
+
+/** Timeline height before it was minimized, in window pixels, to give back when expanded. */
+static int wm_ios_timeline_expanded_height = 0;
+
+/**
+ * Minimized, the bottom timeline is only its header row and the 3D Viewport above takes the room;
+ * expanded, it gets back the height it had, at least a few rows.
+ */
+static void wm_ios_set_timeline_minimized(wmWindow &win, const bool minimized)
+{
+  bScreen *screen = WM_window_get_active_screen(&win);
+  if (screen == nullptr) {
+    return;
+  }
+  ScrArea *area = wm_ios_bottom_timeline(*screen);
+  if (area == nullptr || area->v1 == nullptr || area->v2 == nullptr || area->v4 == nullptr) {
+    return;
+  }
+  const int header = ED_area_headersize();
+  const int bottom = area->v1->vec.y;
+  const int top = area->v2->vec.y;
+  const int height = top - bottom;
+  int target = height;
+  if (minimized) {
+    if (height > header + 2) {
+      wm_ios_timeline_expanded_height = height;
+    }
+    target = header + 1;
+  }
+  else {
+    target = std::max(wm_ios_timeline_expanded_height, header * 5);
+  }
+  if (target == height) {
+    return;
+  }
+  const int new_top = bottom + target;
+  const int left = area->v1->vec.x;
+  const int right = area->v4->vec.x;
+  /* Areas share their corner vertices, so moving the edge resizes the editor above too. */
+  for (ScrVert &vert : screen->vertbase) {
+    if (vert.vec.y == top && vert.vec.x >= left && vert.vec.x <= right) {
+      vert.vec.y = short(new_top);
+    }
+  }
+  screen->do_refresh = true;
+}
+
 /**
  * The draggable edges of visible sidebars and toolbars, for the native grab handles. Blender's own
  * resize zone sits on the region's inner edge (see `region_azone_edge`).
@@ -265,6 +355,7 @@ static GHOST_IOSInteractionContext wm_ios_interaction_context(const Main &bmain,
   context.over_main_region = region != nullptr && region->regiontype == RGN_TYPE_WINDOW;
 
   wm_ios_resize_edges(win, *screen, context);
+  wm_ios_timeline_rect(win, *screen, context);
 
   /* Workspace tabs, in Blender's order. */
   const WorkSpace *active_workspace = WM_window_get_active_workspace(&win);
@@ -430,6 +521,13 @@ static bool wm_ios_run_builtin(bContext *C, const char *idname, const char *name
       {
         WM_window_set_active_workspace(C, win, workspace);
       }
+    }
+    return true;
+  }
+  if (STREQ(idname, "ios.timeline")) {
+    if (wmWindow *win = CTX_wm_window(C)) {
+      wm_ios_set_timeline_minimized(
+          *win, name != nullptr && STREQ(name, "minimized") && STREQ(value, "1"));
     }
     return true;
   }

@@ -4,32 +4,56 @@
 
 /** \file
  * \ingroup GHOST
- * Native on-screen command bar for touch and Apple Pencil: Shift, Ctrl, Alt and Cmd, shortcut
- * keys for the editor under the pointer, and a key pad for typed transform values.
+ * The iPad's left rail and quick bar.
+ *
+ * The rail runs down the left of Blender's canvas as two panels: the tools of the current
+ * 3D Viewport mode on top, filling the height, and Shift, Ctrl, Alt and Cmd below. The quick bar
+ * runs along the bottom: Shift, Ctrl, Alt and Cmd again, the shortcut keys for the editor and mode
+ * under the pointer, and the settings button. A divider above the quick bar sets its height. The
+ * transform key pad shows above the quick bar while a modal operator takes typed values.
  */
 
 #pragma once
 
+#include "GHOST_IOSChrome.hh"
 #include "GHOST_IOSModifierLatch.hh"
 #include "GHOST_IOSTouchKeys.hh"
 
-/**
- * Room Blender's canvas leaves for the bar, which stays open beside it on one edge. The bar is
- * hidden while a hardware keyboard is connected, and the canvas then gets the full width back.
- */
-inline void GHOST_IOSCommandBar_canvasInsets(const bool visible,
-                                             const bool docked_left,
-                                             const double bar_width,
-                                             const double margin,
-                                             double *r_leading,
-                                             double *r_trailing)
+/** Width of the rail's panels, and the margin around them. */
+constexpr double GHOST_IOS_RAIL_WIDTH = 66.0;
+constexpr double GHOST_IOS_RAIL_MARGIN = 12.0;
+/** Quick bar height limits and default, in points; the divider above it sets the height. */
+constexpr double GHOST_IOS_QUICK_BAR_MIN_HEIGHT = 52.0;
+constexpr double GHOST_IOS_QUICK_BAR_MAX_HEIGHT = 120.0;
+constexpr double GHOST_IOS_QUICK_BAR_DEFAULT_HEIGHT = 60.0;
+/** Height of the divider's touch strip, and the gap below the quick bar. */
+constexpr double GHOST_IOS_QUICK_BAR_DIVIDER = 16.0;
+constexpr double GHOST_IOS_QUICK_BAR_GAP = 8.0;
+
+inline double GHOST_IOSQuickBar_clampHeight(const double height)
 {
-  const double inset = visible ? bar_width + margin * 2.0 : 0.0;
-  *r_leading = docked_left ? inset : 0.0;
-  *r_trailing = docked_left ? 0.0 : inset;
+  return height < GHOST_IOS_QUICK_BAR_MIN_HEIGHT ? GHOST_IOS_QUICK_BAR_MIN_HEIGHT :
+         height > GHOST_IOS_QUICK_BAR_MAX_HEIGHT ? GHOST_IOS_QUICK_BAR_MAX_HEIGHT :
+                                                   height;
 }
 
-/** Buttons below the shortcut keys. */
+/**
+ * Room Blender's canvas leaves on the left for the rail and at the bottom for the quick bar and
+ * its divider. While a hardware keyboard is connected the quick bar hides and gives its room back;
+ * the rail's tools stay.
+ */
+inline void GHOST_IOSRail_canvasInsets(const bool quick_bar_visible,
+                                       const double quick_bar_height,
+                                       double *r_leading,
+                                       double *r_bottom)
+{
+  *r_leading = GHOST_IOS_RAIL_WIDTH + GHOST_IOS_RAIL_MARGIN * 2.0;
+  *r_bottom = quick_bar_visible ? GHOST_IOSQuickBar_clampHeight(quick_bar_height) +
+                                      GHOST_IOS_QUICK_BAR_DIVIDER + GHOST_IOS_QUICK_BAR_GAP :
+                                  0.0;
+}
+
+/** Buttons the window still handles, from the menu bar and gestures. */
 enum class GHOST_IOSBarAction : uint8_t {
   /** Toggle Focus mode for the editor under the pointer. */
   Focus,
@@ -41,58 +65,61 @@ enum class GHOST_IOSBarAction : uint8_t {
 
 #ifdef __OBJC__
 
-#import <CoreGraphics/CoreGraphics.h>
-#import <Foundation/Foundation.h>
+#  import <CoreGraphics/CoreGraphics.h>
+#  import <Foundation/Foundation.h>
 
 @class UIMenu;
 @class UIView;
 
-/** The view that holds Blender's canvas and the bar side by side, and insets the canvas. */
+/** The view that holds Blender's canvas and the native bars around it, and insets the canvas. */
 @protocol GHOSTIOSCanvasInsetting <NSObject>
 - (void)setCanvasInsetsLeading:(CGFloat)leading trailing:(CGFloat)trailing;
-/** Room for the native header and tool dock, not counting the screen's safe area. */
-- (void)setCanvasInsetsTop:(CGFloat)top bottom:(CGFloat)bottom;
+/** Room for the native header, not counting the screen's safe area. */
+- (void)setCanvasInsetTop:(CGFloat)top;
+/** Room for the quick bar, not counting the screen's safe area. */
+- (void)setCanvasInsetBottom:(CGFloat)bottom;
 @end
 
-/** Receives touches on the belt's keys. Timestamps are `UITouch.timestamp` seconds. */
+/** Receives touches on the rail and the quick bar. Timestamps are `UITouch.timestamp` seconds. */
 @protocol GHOSTIOSModifierBeltDelegate <NSObject>
 - (void)modifierBeltKey:(GHOST_IOSModifier)modifier
                    down:(BOOL)down
               timestamp:(NSTimeInterval)timestamp;
 - (void)modifierBeltKeyCancelled:(GHOST_IOSModifier)modifier;
-/** The belt was hidden, for example because a hardware keyboard connected. */
+/** The quick bar was hidden, for example because a hardware keyboard connected. */
 - (void)modifierBeltDidHide;
 /** A shortcut or key pad key was tapped. */
 - (void)commandBarKey:(const GHOST_IOSBarKey &)key;
 /** Shortcut key \a index was held to replace it. */
 - (void)commandBarEditKey:(int)index;
-/** One of the Focus, Properties or Outliner buttons was tapped. */
-- (void)commandBarAction:(GHOST_IOSBarAction)action;
+/** Tool \a index of those passed to #GHOST_IOSModifierBelt_setTools was tapped. */
+- (void)commandBarTool:(int)index;
 @end
 
 /**
- * Add the bar beside \a input_view, Blender's canvas. When the canvas' superview implements
- * #GHOSTIOSCanvasInsetting, the bar goes there and the canvas is inset so the bar covers nothing.
- * The bar is always open, docked to the left or right edge in the half the user last chose. The
- * delegate is not retained.
+ * Add the rail and the quick bar beside \a input_view, Blender's canvas. When the canvas'
+ * superview implements #GHOSTIOSCanvasInsetting, they go there and the canvas is inset so they
+ * cover nothing. The delegate is not retained.
  */
 NSObject *GHOST_IOSModifierBelt_create(UIView *input_view,
                                        id<GHOSTIOSModifierBeltDelegate> delegate);
 void GHOST_IOSModifierBelt_destroy(NSObject *belt);
 bool GHOST_IOSModifierBelt_containsView(NSObject *belt, UIView *view);
-/** Show each key's state, indexed by #GHOST_IOSModifier. */
+/** Show each modifier key's state, on the rail and the quick bar, indexed by #GHOST_IOSModifier. */
 void GHOST_IOSModifierBelt_setModes(NSObject *belt,
                                     const GHOST_IOSModifierMode modes[GHOST_IOS_MODIFIER_COUNT]);
-/**
- * Fade the belt while the app-drawn finger cursor is over it, so the target under the belt stays
- * visible. \a point is in \a input_view points.
- */
+/** Kept for the window's cursor updates; the bars sit beside the canvas, so nothing fades. */
 void GHOST_IOSModifierBelt_setCursor(NSObject *belt, CGPoint point, bool visible);
-/** Show \a count shortcut keys below the modifiers. The keys are copied. */
+/** Show \a count shortcut keys on the quick bar. The keys are copied. */
 void GHOST_IOSModifierBelt_setContextKeys(NSObject *belt, const GHOST_IOSBarKey *keys, int count);
-/** Show the transform key pad next to the bar, while a modal operator takes typed values. */
+/** Show the tools of the current mode on the rail, \a active highlighted (-1 for none). */
+void GHOST_IOSModifierBelt_setTools(NSObject *belt,
+                                    const GHOST_IOSToolItem *tools,
+                                    int count,
+                                    int active);
+/** Show the transform key pad above the quick bar, while a modal operator takes typed values. */
 void GHOST_IOSModifierBelt_setKeyPadVisible(NSObject *belt, bool visible);
-/** The menu behind the bar's settings button. */
+/** The menu behind the quick bar's settings button. */
 void GHOST_IOSModifierBelt_setSettingsMenu(NSObject *belt, UIMenu *menu);
 
 #endif

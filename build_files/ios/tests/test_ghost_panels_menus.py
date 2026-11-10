@@ -245,7 +245,7 @@ class CustomActionTests(unittest.TestCase):
             CHECK(std::strcmp(bar.set, "object") == 0);
             CHECK(bar.count == 6);
             CHECK(std::strcmp(bar.keys[1].command, "wm.call_menu\\nname=VIEW3D_MT_add") == 0);
-            CHECK(bar.keys[0].command == nullptr && std::strcmp(bar.keys[0].title, "Tab") == 0);
+            CHECK(bar.keys[5].command == nullptr && std::strcmp(bar.keys[5].title, "Tab") == 0);
             /* Each editor keeps its own set. */
             bar.build(context(GHOST_IOSEditor::Node, GHOST_IOSMode::Other), file);
             CHECK(std::strcmp(bar.set, "node") == 0);
@@ -456,10 +456,12 @@ class PanelSourceTests(unittest.TestCase):
                       should_receive)
 
     def test_command_bar_buttons_and_focus(self) -> None:
+        # The agreed quick bar has no Focus, Properties or Outliner buttons; they stay in the
+        # menu bar and the tap gestures.
         belt = BELT_SOURCE.read_text()
         for identifier in ("blender_command_bar_focus", "blender_command_bar_properties",
                            "blender_command_bar_outliner"):
-            self.assertIn(f'@"{identifier}"', belt)
+            self.assertNotIn(f'@"{identifier}"', belt)
         focus = self.window[self.window.index("- (void)toggleFocusMode") :]
         focus = focus[: focus.index("\n}\n")]
         self.assertIn('"screen.screen_full_area", "use_hide_panels", "1"', focus)

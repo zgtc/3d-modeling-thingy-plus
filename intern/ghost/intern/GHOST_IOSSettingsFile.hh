@@ -133,6 +133,8 @@ inline std::string GHOST_IOSSettingsFile_write(const GHOST_IOSSettingsFile &file
   out += std::string("  \"pencil_only_drawing\": ") +
          (touch.pencil_only_drawing ? "true" : "false") + ",\n";
   out += std::string("  \"touch_spacing\": ") + (touch.touch_spacing ? "true" : "false") + ",\n";
+  out += std::string("  \"timeline_minimized\": ") + (touch.timeline_minimized ? "true" : "false") +
+         ",\n";
   out += "  \"tap_gestures\": [";
   for (int i = 0; i < GHOST_IOS_TAP_GESTURE_COUNT; i++) {
     std::snprintf(number, sizeof(number), "%s%d", i ? ", " : "", int(touch.tap_gestures[i]));
@@ -215,6 +217,12 @@ class GHOST_IOSJSONReader {
         return false;
       }
       touch.touch_spacing = flag;
+    }
+    else if (key == "timeline_minimized") {
+      if (!readBool(&flag)) {
+        return false;
+      }
+      touch.timeline_minimized = flag;
     }
     else if (key == "tap_gestures") {
       if (!expect('[')) {

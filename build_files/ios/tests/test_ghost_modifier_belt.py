@@ -295,8 +295,8 @@ class GhostModifierBeltIntegrationTests(unittest.TestCase):
     def test_belt_keys_expose_state_for_ui_tests(self) -> None:
         source = BELT_SOURCE.read_text()
         for identifier in (
-            "blender_modifier_belt",
-            "blender_modifier_belt_handle",
+            "blender_rail_modifiers",
+            "blender_quick_bar",
             "blender_modifier_shift",
             "blender_modifier_control",
             "blender_modifier_alt",
@@ -304,10 +304,11 @@ class GhostModifierBeltIntegrationTests(unittest.TestCase):
             self.assertIn(identifier, source)
         self.assertIn("accessibilityValue", source)
 
-    def test_belt_moves_and_snaps_to_corners_and_remembers_the_corner(self) -> None:
+    def test_quick_bar_divider_drags_and_remembers_the_height(self) -> None:
         source = BELT_SOURCE.read_text()
         self.assertIn("UIPanGestureRecognizer", source)
-        self.assertIn("GHOST_IOSModifierBeltCorner", source)
+        self.assertNotIn("GHOST_IOSModifierBeltCorner", source)
+        self.assertIn("GHOST_IOSQuickBarHeightKey", source)
         self.assertIn("NSUserDefaults", source)
         self.assertIn("safeAreaLayoutGuide", source)
 

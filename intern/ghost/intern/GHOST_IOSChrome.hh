@@ -4,11 +4,11 @@
 
 /** \file
  * \ingroup GHOST
- * Platform-neutral contents of the iPad's native header and tool dock.
+ * Platform-neutral contents of the iPad's native header and tool rail.
  *
  * The header replaces Blender's top bar with one menu button and a scrollable strip of workspace
- * tabs; the mode stays in the 3D Viewport's own mode menu. The tool dock along the bottom, and the Tools
- * page of the Pencil squeeze palette, replace the tool shelf on the left of the viewport. Every
+ * tabs; the mode stays in the 3D Viewport's own mode menu. The tool panel on the left rail, and the
+ * Tools page of the Pencil squeeze palette, replace the tool shelf on the left of the viewport. Every
  * control queues an operator call, so tools, modes and workspaces are Blender's own.
  */
 
