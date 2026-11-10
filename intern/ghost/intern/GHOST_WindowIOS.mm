@@ -2114,6 +2114,14 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   if (sender.state == UIGestureRecognizerStateBegan ||
       sender.state == UIGestureRecognizerStateChanged)
   {
+    /* Hovering a native control (palette, key pad, file buttons) must leave Blender's cursor
+     * where it was. Otherwise a slot such as Duplicate starts its transform at the control, and
+     * the item then trails the Pencil tip by that offset. */
+    UIView *canvas = window->getView();
+    UIView *under = [canvas hitTest:[sender locationInView:canvas] withEvent:nil];
+    if (under != nil && under != window->getView()) {
+      return;
+    }
     GHOST_IOSPointerSource source = GHOST_IOSPointerSource::Hardware;
     if ([sender getTouchType] == UITouchTypePencil) {
       /* Pencil hover needs absolute tablet motion; pointer hover must remain a mouse. */
@@ -2658,6 +2666,60 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 
 @end
 
+/**
+ * The view controller's root view: Blender's Metal canvas, inset on the side where the command
+ * bar sits, and the bar itself beside it. #GHOST_WindowIOS::getView stays the canvas, so every
+ * touch, Pencil and pointer coordinate is unchanged.
+ */
+@interface GHOSTIOSCanvasContainer : UIView <GHOSTIOSCanvasInsetting> {
+  UIView *canvas_;
+  CGFloat leading_inset_;
+  CGFloat trailing_inset_;
+}
+- (instancetype)initWithCanvas:(UIView *)canvas;
+@end
+
+@implementation GHOSTIOSCanvasContainer
+
+- (instancetype)initWithCanvas:(UIView *)canvas
+{
+  self = [super initWithFrame:canvas.frame];
+  if (self == nil) {
+    return nil;
+  }
+  canvas_ = canvas;
+  leading_inset_ = 0.0f;
+  trailing_inset_ = 0.0f;
+  /* Matches the area around Blender's editors, so the bar's column reads as part of the UI. */
+  self.backgroundColor = [UIColor colorWithWhite:0.11f alpha:1.0f];
+  self.accessibilityIdentifier = @"blender_canvas_container";
+  canvas.autoresizingMask = UIViewAutoresizingNone;
+  [self addSubview:canvas];
+  return self;
+}
+
+- (void)setCanvasInsetsLeading:(CGFloat)leading trailing:(CGFloat)trailing
+{
+  if (leading == leading_inset_ && trailing == trailing_inset_) {
+    return;
+  }
+  leading_inset_ = leading;
+  trailing_inset_ = trailing;
+  [self setNeedsLayout];
+}
+
+- (void)layoutSubviews
+{
+  [super layoutSubviews];
+  const CGRect bounds = self.bounds;
+  const CGFloat width = std::max<CGFloat>(1.0f, bounds.size.width - leading_inset_ - trailing_inset_);
+  /* A new canvas size reaches Blender as a window resize, through the drawable size. */
+  canvas_.frame = CGRectMake(bounds.origin.x + leading_inset_, bounds.origin.y, width,
+                             bounds.size.height);
+}
+
+@end
+
 @implementation GHOST_IOSViewController
 {
   MTKView *_view;
@@ -2673,7 +2735,7 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     _view = mtkView;
     _screen = windowScene.screen;
     _view.multipleTouchEnabled = YES;
-    self.view = (UIView *)mtkView;
+    self.view = [[[GHOSTIOSCanvasContainer alloc] initWithCanvas:mtkView] autorelease];
   }
 
   return self;
@@ -2691,7 +2753,6 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 - (void)viewDidLoad
 {
   [super viewDidLoad];
-  _view = (MTKView *)self.view;
   _view.enableSetNeedsDisplay = NO;
   _view.device = MTLCreateSystemDefaultDevice();
   _view.clearColor = MTLClearColorMake(0, 0, 0, 1.0);
@@ -2787,13 +2848,14 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *system_ios,
     uiview_controller_.modalPresentationStyle = UIModalPresentationPageSheet;
   }
   rootWindow.rootViewController = uiview_controller_;
-  metal_view_.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-                                 UIViewAutoresizingFlexibleHeight;
+  uiview_controller_.view.frame = rootWindow.bounds;
+  uiview_controller_.view.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                                             UIViewAutoresizingFlexibleHeight;
   metal_view_.frame = rootWindow.bounds;
 
-  /* Create UIView */
+  /* The canvas is the input view; the controller's root view only holds it beside the bar. */
   GHOST_ASSERT(width > 0 && height > 0, "invalid wh");
-  uiview_ = uiview_controller_.view;
+  uiview_ = metal_view_;
   GHOST_ASSERT(uiview_, "uiview not valid");
 
   /* Initialize Metal device. */

@@ -6,11 +6,11 @@
  * \ingroup GHOST
  * Native on-screen command bar for touch and Apple Pencil.
  *
- * The bar is a small handle docked to the left or right screen edge, in the top or bottom half.
- * Tapping it shows the keys: Shift, Ctrl, Alt and Cmd, then up to six shortcut keys for the
- * editor and mode under the pointer, then a settings button. Swiping towards the edge tucks the
- * keys away again. While a modal operator takes typed values, a key pad with axes and numbers
- * shows next to the bar, so `G Z 2 Enter` works without a keyboard.
+ * The bar stays open on the left or right screen edge, beside Blender's canvas, which is inset so
+ * the bar never covers it. From the handle it shows Shift, Ctrl, Alt and Cmd, then up to six
+ * shortcut keys for the editor and mode under the pointer, then a settings button. Drag the handle
+ * to another corner, or tap it to switch sides. While a modal operator takes typed values, a key
+ * pad with axes and numbers shows next to the bar, so `G Z 2 Enter` works without a keyboard.
  *
  * Each modifier can be held like a hardware key, tapped to apply to the next click, or double
  * tapped to stay on. The key logic lives in #GHOST_IOSModifierLatch and the key sets in
@@ -366,7 +366,8 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   NSArray<NSLayoutConstraint *> *corner_constraints_;
   UIPanGestureRecognizer *pan_;
   UITapGestureRecognizer *tap_;
-  UISwipeGestureRecognizer *swipe_;
+  /** Blender's canvas. Not retained. */
+  UIView *input_view_;
   id keyboard_connect_observer_;
   id keyboard_disconnect_observer_;
   NSInteger corner_;
@@ -395,7 +396,9 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
     return nil;
   }
   delegate_ = delegate;
-  expanded_ = NO;
+  input_view_ = input_view;
+  /* Pinned open: a tucked-away bar was hard to find and slow to reach. */
+  expanded_ = YES;
   cursor_over_ = NO;
   context_key_count_ = 0;
   key_pad_wanted_ = NO;
@@ -433,8 +436,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   handle_.isAccessibilityElement = YES;
   handle_.accessibilityTraits = UIAccessibilityTraitButton;
   handle_.accessibilityLabel = @"Modifier keys";
-  handle_.accessibilityHint =
-      @"Tap to show modifier and shortcut keys. Drag to move to another corner.";
+  handle_.accessibilityHint = @"Tap to switch sides. Drag to move to another corner.";
   handle_.accessibilityIdentifier = @"blender_modifier_belt_handle";
   handle_icon_ = [[UIImageView alloc] init];
   handle_icon_.translatesAutoresizingMaskIntoConstraints = NO;
@@ -447,7 +449,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
     GHOSTIOSModifierKeyView *key = [[[GHOSTIOSModifierKeyView alloc] initWithKey:info
                                                                          delegate:delegate]
         autorelease];
-    key.hidden = YES;
+    key.hidden = !expanded_;
     [keys addObject:key];
   }
   keys_ = [keys copy];
@@ -455,7 +457,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   separator_ = [[UIView alloc] init];
   separator_.translatesAutoresizingMaskIntoConstraints = NO;
   separator_.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.25f];
-  separator_.hidden = YES;
+  separator_.hidden = !expanded_;
 
   settings_button_ = [[UIButton buttonWithType:UIButtonTypeSystem] retain];
   settings_button_.translatesAutoresizingMaskIntoConstraints = NO;
@@ -465,7 +467,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   settings_button_.showsMenuAsPrimaryAction = YES;
   settings_button_.accessibilityLabel = @"Touch and Pencil settings";
   settings_button_.accessibilityIdentifier = @"blender_command_bar_settings";
-  settings_button_.hidden = YES;
+  settings_button_.hidden = !expanded_;
 
   stack_ = [[UIStackView alloc] init];
   stack_.translatesAutoresizingMaskIntoConstraints = NO;
@@ -498,11 +500,8 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   pan_.maximumNumberOfTouches = 1;
   [handle_ addGestureRecognizer:tap_];
   [handle_ addGestureRecognizer:pan_];
-  /* Swiping towards the docked edge tucks the keys away. */
-  swipe_ = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(handleSwipe:)];
-  [self addGestureRecognizer:swipe_];
 
-  [input_view addSubview:self];
+  [[self hostView] addSubview:self];
   [self createKeyPadInView:input_view];
   [self arrangeForCorner];
   [self activateCornerConstraints];
@@ -540,7 +539,9 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   }
   [handle_ removeGestureRecognizer:tap_];
   [handle_ removeGestureRecognizer:pan_];
-  [self removeGestureRecognizer:swipe_];
+  if (id<GHOSTIOSCanvasInsetting> host = [self insettingHost]) {
+    [host setCanvasInsetsLeading:0.0f trailing:0.0f];
+  }
   for (GHOSTIOSCommandKeyButton *key in context_keys_) {
     [key forgetDelegate];
   }
@@ -567,8 +568,34 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   [corner_constraints_ release];
   [pan_ release];
   [tap_ release];
-  [swipe_ release];
   [super dealloc];
+}
+
+/** The canvas' superview when it can make room for the bar. */
+- (id<GHOSTIOSCanvasInsetting>)insettingHost
+{
+  UIView *host = input_view_.superview;
+  if ([host conformsToProtocol:@protocol(GHOSTIOSCanvasInsetting)]) {
+    return (id<GHOSTIOSCanvasInsetting>)host;
+  }
+  return nil;
+}
+
+- (UIView *)hostView
+{
+  return [self insettingHost] != nil ? input_view_.superview : input_view_;
+}
+
+- (void)updateCanvasInsets
+{
+  id<GHOSTIOSCanvasInsetting> host = [self insettingHost];
+  if (host == nil) {
+    return;
+  }
+  double leading = 0.0, trailing = 0.0;
+  GHOST_IOSCommandBar_canvasInsets(
+      !self.hidden, [self isLeftCorner], belt_width, edge_inset, &leading, &trailing);
+  [host setCanvasInsetsLeading:leading trailing:trailing];
 }
 
 - (BOOL)isLeftCorner
@@ -605,8 +632,6 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   for (UIView *view in views) {
     [stack_ addArrangedSubview:view];
   }
-  swipe_.direction = [self isLeftCorner] ? UISwipeGestureRecognizerDirectionLeft :
-                                           UISwipeGestureRecognizerDirectionRight;
 }
 
 - (void)activateCornerConstraints
@@ -641,6 +666,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
                            [key_pad_.bottomAnchor constraintEqualToAnchor:self.bottomAnchor];
   corner_constraints_ = [@[ horizontal, vertical, pad_horizontal, pad_vertical ] retain];
   [NSLayoutConstraint activateConstraints:corner_constraints_];
+  [self updateCanvasInsets];
 }
 
 - (void)createKeyPadInView:(UIView *)input_view
@@ -710,12 +736,10 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
 
 - (void)updateHandle
 {
-  NSString *symbol = @"keyboard";
+  /* A grabber: the bar is always open, so the handle only moves it. */
+  NSString *symbol = @"line.3.horizontal";
   bool any_active = false;
-  if (expanded_) {
-    symbol = [self isLeftCorner] ? @"chevron.left" : @"chevron.right";
-  }
-  else {
+  if (!expanded_) {
     /* Show which key is on while the keys are tucked away. */
     for (const GHOST_IOSModifierKeyInfo &info : GHOST_IOS_MODIFIER_KEYS) {
       if (modes_[int(info.modifier)] != GHOST_IOSModifierMode::Off) {
@@ -730,49 +754,40 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   handle_.accessibilityValue = expanded_ ? @"expanded" : @"collapsed";
 }
 
-- (void)setExpanded:(BOOL)expanded
+/** Tapping the handle moves the bar to the other side, keeping its half. */
+- (void)handleTap:(UITapGestureRecognizer *)sender
 {
-  if (expanded_ == expanded) {
+  if (sender.state != UIGestureRecognizerStateEnded) {
     return;
   }
-  expanded_ = expanded;
-  if (!expanded) {
-    /* A finger still on a key must not stay held once the key is gone. */
-    for (GHOSTIOSModifierKeyView *key in keys_) {
-      [key cancelTracking];
-    }
+  GHOST_IOSStyle_selectionFeedback();
+  switch (corner_) {
+    case GHOST_IOS_BELT_TOP_LEFT:
+      corner_ = GHOST_IOS_BELT_TOP_RIGHT;
+      break;
+    case GHOST_IOS_BELT_TOP_RIGHT:
+      corner_ = GHOST_IOS_BELT_TOP_LEFT;
+      break;
+    case GHOST_IOS_BELT_BOTTOM_LEFT:
+      corner_ = GHOST_IOS_BELT_BOTTOM_RIGHT;
+      break;
+    default:
+      corner_ = GHOST_IOS_BELT_BOTTOM_LEFT;
+      break;
   }
-  NSArray<UIView *> *views = [self expandableViews];
+  [NSUserDefaults.standardUserDefaults setInteger:corner_ forKey:GHOST_IOSModifierBeltCorner];
+  [self arrangeForCorner];
+  [self activateCornerConstraints];
+  [self updateHandle];
   [UIView animateWithDuration:0.25
                         delay:0.0
        usingSpringWithDamping:0.9f
         initialSpringVelocity:0.0f
                       options:UIViewAnimationOptionAllowUserInteraction
                    animations:^{
-                     for (UIView *view in views) {
-                       view.hidden = !expanded;
-                       view.alpha = expanded ? 1.0f : 0.0f;
-                     }
                      [self.superview layoutIfNeeded];
                    }
                    completion:nil];
-  [self updateHandle];
-}
-
-- (void)handleTap:(UITapGestureRecognizer *)sender
-{
-  if (sender.state == UIGestureRecognizerStateEnded) {
-    GHOST_IOSStyle_selectionFeedback();
-    [self setExpanded:!expanded_];
-  }
-}
-
-- (void)handleSwipe:(UISwipeGestureRecognizer *)sender
-{
-  if (sender.state == UIGestureRecognizerStateEnded && expanded_) {
-    GHOST_IOSStyle_selectionFeedback();
-    [self setExpanded:NO];
-  }
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)sender
@@ -837,6 +852,8 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
 
 - (void)setCursor:(CGPoint)point visible:(bool)visible
 {
+  /* \a point is in canvas points; the bar may live beside the canvas. */
+  point = [input_view_ convertPoint:point toView:self.superview];
   const BOOL over = visible && !self.hidden &&
                     CGRectContainsPoint(CGRectInset(self.frame, -6.0f, -6.0f), point);
   if (over == cursor_over_) {
@@ -869,8 +886,12 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
               hide ? "connected" : "disconnected");
   self.hidden = hide;
   [self updateKeyPadVisibility];
+  [self updateCanvasInsets];
   if (hide) {
-    [self setExpanded:NO];
+    /* Release any modifier still held; the bar opens again with the keyboard gone. */
+    for (GHOSTIOSModifierKeyView *key in keys_) {
+      [key cancelTracking];
+    }
     [delegate_ modifierBeltDidHide];
   }
 }

@@ -391,3 +391,20 @@ BELT_SOURCE_TEXT = (GHOST_INTERN / "GHOST_IOSModifierBelt.mm").read_text()
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PencilHoverOverControlsTests(unittest.TestCase):
+    """A Pencil hovering a native control must not move Blender's cursor (device feedback on #3).
+
+    Otherwise a palette slot or key such as Duplicate starts its transform where the control
+    was, and the item then trails the Pencil tip by that offset.
+    """
+
+    def test_hover_over_native_controls_keeps_the_cursor(self) -> None:
+        window = WINDOW_SOURCE.read_text()
+        hover = window[window.index("- (void)handleHover:(GHOSTUIHoverGestureRecognizer *)sender\n{") :]
+        hover = hover[: hover.index("\n}\n")]
+        hit = hover.index("hitTest:")
+        move = hover.index("virtual_pointer->moveAbsolute(")
+        self.assertLess(hit, move)
+        self.assertIn("!= window->getView()", hover)

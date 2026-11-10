@@ -23,6 +23,7 @@ def run_harness(test: unittest.TestCase, body: str) -> None:
     """Compile a C++ program against the platform-neutral command bar headers and run it."""
     harness = textwrap.dedent(
         """
+        #include "GHOST_IOSModifierBelt.hh"
         #include "GHOST_IOSModifierLatch.hh"
         #include "GHOST_IOSTouchKeys.hh"
 
@@ -239,7 +240,7 @@ class CommandBarSourceTests(unittest.TestCase):
         self.assertIn("stack_.axis = UILayoutConstraintAxisVertical;", self.belt)
         self.assertIn('@"blender_modifier_os"', self.belt)
         self.assertIn("GHOST_IOSModifier::OS", self.belt)
-        self.assertIn("UISwipeGestureRecognizer", self.belt)
+        # Pinned open: no swipe to tuck the bar away (see PinnedCommandBarTests).
         self.assertIn("settings_button_.showsMenuAsPrimaryAction = YES;", self.belt)
         self.assertIn('@"blender_command_bar_settings"', self.belt)
         self.assertIn('@"blender_command_bar_key_pad"', self.belt)
@@ -337,3 +338,51 @@ class WindowManagerChannelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PinnedCommandBarTests(unittest.TestCase):
+    """The bar stays open and Blender's canvas makes room for it (device feedback on #3)."""
+
+    def setUp(self) -> None:
+        self.belt = BELT_SOURCE.read_text()
+        self.window = WINDOW_SOURCE.read_text()
+
+    def test_canvas_insets_leave_room_for_the_docked_bar(self) -> None:
+        run_harness(
+            self,
+            """
+            double leading = -1.0, trailing = -1.0;
+            GHOST_IOSCommandBar_canvasInsets(true, true, 66.0, 12.0, &leading, &trailing);
+            CHECK(leading == 90.0 && trailing == 0.0);
+            GHOST_IOSCommandBar_canvasInsets(true, false, 66.0, 12.0, &leading, &trailing);
+            CHECK(leading == 0.0 && trailing == 90.0);
+            /* With a hardware keyboard the bar hides and the canvas gets the full width back. */
+            GHOST_IOSCommandBar_canvasInsets(false, true, 66.0, 12.0, &leading, &trailing);
+            CHECK(leading == 0.0 && trailing == 0.0);
+            """,
+        )
+
+    def test_bar_is_pinned_open(self) -> None:
+        init = self.belt[self.belt.index("- (instancetype)initWithInputView:(UIView *)input_view\n                         delegate:(id<GHOSTIOSModifierBeltDelegate>)delegate\n{") :]
+        init = init[: init.index("\n}\n")]
+        self.assertIn("expanded_ = YES;", init)
+        self.assertNotIn("UISwipeGestureRecognizer", self.belt)
+        tap = self.belt[self.belt.index("- (void)handleTap:(UITapGestureRecognizer *)sender") :]
+        tap = tap[: tap.index("\n}\n")]
+        self.assertNotIn("setExpanded:", tap)
+
+    def test_bar_sits_beside_the_canvas_not_over_it(self) -> None:
+        self.assertIn("setCanvasInsetsLeading:", self.belt)
+        self.assertIn("GHOST_IOSCommandBar_canvasInsets(", self.belt)
+        # The view controller's root view holds the canvas and the bar side by side, while
+        # getView() stays the Metal canvas so every touch coordinate is unchanged.
+        self.assertIn("@interface GHOSTIOSCanvasContainer : UIView", self.window)
+        self.assertIn("uiview_ = metal_view_;", self.window)
+        layout = self.window[self.window.index("@implementation GHOSTIOSCanvasContainer") :]
+        layout = layout[layout.index("- (void)layoutSubviews") :]
+        layout = layout[: layout.index("\n}\n")]
+        self.assertIn("leading_inset_", layout)
+        self.assertIn("trailing_inset_", layout)
+        load = self.window[self.window.index("- (void)viewDidLoad") :]
+        load = load[: load.index("\n}\n")]
+        self.assertNotIn("_view = (MTKView *)self.view;", load)
