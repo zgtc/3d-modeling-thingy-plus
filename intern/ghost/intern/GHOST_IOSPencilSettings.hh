@@ -80,8 +80,8 @@ struct GHOST_IOSTouchSettings {
   GHOST_IOSSqueezeChoice squeeze = GHOST_IOSSqueezeChoice::System;
   /** Like iPadOS "Only Draw with Apple Pencil": fingers navigate the viewport, never paint. */
   bool pencil_only_drawing = false;
-  /** More room between Blender's buttons, rows and panels for fingers. */
-  bool touch_spacing = false;
+  /** More room between Blender's buttons, rows and panels, and larger text. On for touch. */
+  bool touch_spacing = true;
   GHOST_IOSGestureAction tap_gestures[GHOST_IOS_TAP_GESTURE_COUNT] = {
       GHOST_IOSGestureAction::Undo,
       GHOST_IOSGestureAction::Redo,

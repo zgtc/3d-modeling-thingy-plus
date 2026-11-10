@@ -33,8 +33,9 @@ you finish the operation.
 
 ## Command bar
 
-The keyboard button at the left or right edge of the screen opens the command
-bar. Tap it again, or swipe toward the edge, to tuck the bar away.
+The command bar stays open on the left or right edge of the screen. Blender's
+workspace sits beside it, so the bar never covers the tool shelf or the
+viewport.
 
 From the handle outward, the bar has:
 
@@ -59,10 +60,10 @@ Tapped and locked keys only apply to clicks, drags, and shortcut keys.
 Two-finger orbit and other navigation gestures keep working normally between
 clicks.
 
-Drag the keyboard button to move the bar. It docks to the left or right edge,
-in the top or bottom half, and stays there next time. The bar fades while the
-cursor is over it, so you can see what's underneath. It hides while a hardware
-keyboard is connected.
+Tap the handle at the end of the bar to move it to the other side, or drag the
+handle to another corner. The bar stays where you put it next time. It hides
+while a hardware keyboard is connected, and the workspace then uses the full
+width.
 
 ### Typing values without a keyboard
 
@@ -79,8 +80,9 @@ The settings button opens **Touch and Pencil** settings:
 - What Apple Pencil double tap and squeeze do. See [Apple Pencil](/3d-modeling-thingy-ios/controls/keyboard-mouse-pencil/#apple-pencil).
 - **Only Draw with Apple Pencil.**
 - What the two-, three-, and four-finger taps do.
-- **Touch Spacing**, which adds room between Blender's buttons, rows, and
-  panels so a finger lands on the one you mean. It doesn't change the UI scale.
+- **Touch Spacing**, on by default, which adds room between Blender's buttons,
+  rows, and panels and makes their text a little larger, so a finger lands on
+  the one you mean. It doesn't change the UI scale.
 - Settings sync and resetting your custom keys.
 
 ### Customizing keys and the Pencil palette
@@ -106,6 +108,9 @@ Each editor and mode keeps its own set. **Reset to Default** restores one key;
 | Resize a toolbar or sidebar | Drag the white grab handle on its edge. |
 | Focus mode | Tap the Focus button on the command bar, or choose **Window > Focus Mode**. The editor under the cursor fills the screen with its panels hidden. Do it again to go back. |
 | Properties or Outliner | Tap its button on the command bar, or choose it from the **Window** menu, to open it in a floating window. |
+
+On the side where the command bar sits, the workspace doesn't reach the screen
+edge, so use the **Viewport** menu there instead of a swipe.
 
 Edge swipes act on the editor where the swipe ends. They only start at the very
 edge of the screen, so they don't get in the way of Blender's own controls.

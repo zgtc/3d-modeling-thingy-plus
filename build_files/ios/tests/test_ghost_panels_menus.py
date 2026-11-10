@@ -409,6 +409,22 @@ class PanelSourceTests(unittest.TestCase):
         self.assertIn("enabled ? 2.0f : 1.0f", spacing)
         self.assertIn("style->buttonspacey", spacing)
         self.assertNotIn("U.ui_scale", spacing)
+        # Larger text too, restored from the saved values when off.
+        self.assertIn("enabled ? 1.15f : 1.0f", spacing)
+        self.assertIn("style->widget.points = spacing.widget_points * text_factor;", spacing)
+
+    def test_touch_spacing_is_on_by_default(self) -> None:
+        run_harness(
+            self,
+            """
+            GHOST_IOSTouchSettings settings;
+            CHECK(settings.touch_spacing);
+            /* A file written before the setting existed reads as on. */
+            GHOST_IOSSettingsFile file;
+            CHECK(GHOST_IOSSettingsFile_read("{\\"version\\": 1}", &file));
+            CHECK(file.touch.touch_spacing);
+            """,
+        )
 
     def test_resize_edges_match_blenders_region_resize_zones(self) -> None:
         edges = self.shim[self.shim.index("static void wm_ios_resize_edges(") :]
