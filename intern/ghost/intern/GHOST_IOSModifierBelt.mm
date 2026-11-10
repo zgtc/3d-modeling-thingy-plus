@@ -279,14 +279,18 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
 
 /** A key that sends one key stroke when tapped. */
 @interface GHOSTIOSCommandKeyButton : UIButton {
-  GHOST_IOSKeyStroke stroke_;
+  GHOST_IOSBarKey key_;
   id<GHOSTIOSModifierBeltDelegate> delegate_;
+  /** Index among the shortcut keys for editing, or -1 for key pad keys. */
+  int edit_index_;
+  BOOL edit_started_;
 }
 + (instancetype)keyWithInfo:(const GHOST_IOSBarKey &)info
                    delegate:(id<GHOSTIOSModifierBeltDelegate>)delegate
                       width:(CGFloat)width
                      height:(CGFloat)height
                  identifier:(NSString *)identifier;
+- (void)setEditIndex:(int)index;
 - (void)forgetDelegate;
 @end
 
@@ -299,8 +303,10 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
                  identifier:(NSString *)identifier
 {
   GHOSTIOSCommandKeyButton *key = [self buttonWithType:UIButtonTypeCustom];
-  key->stroke_ = info.stroke;
+  key->key_ = info;
   key->delegate_ = delegate;
+  key->edit_index_ = -1;
+  key->edit_started_ = NO;
   NSString *title = [NSString stringWithUTF8String:info.title];
   key.translatesAutoresizingMaskIntoConstraints = NO;
   [key setTitle:title forState:UIControlStateNormal];
@@ -330,8 +336,32 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
 
 - (void)handlePress
 {
+  if (edit_started_) {
+    edit_started_ = NO;
+    return;
+  }
   GHOST_IOSStyle_selectionFeedback();
-  [delegate_ commandBarKey:stroke_];
+  [delegate_ commandBarKey:key_];
+}
+
+- (void)setEditIndex:(int)index
+{
+  edit_index_ = index;
+  UILongPressGestureRecognizer *hold = [[[UILongPressGestureRecognizer alloc]
+      initWithTarget:self
+              action:@selector(handleHold:)] autorelease];
+  hold.minimumPressDuration = 0.6;
+  [self addGestureRecognizer:hold];
+  self.accessibilityHint = @"Hold to replace this key";
+}
+
+- (void)handleHold:(UILongPressGestureRecognizer *)sender
+{
+  if (sender.state == UIGestureRecognizerStateBegan && edit_index_ >= 0) {
+    edit_started_ = YES;
+    GHOST_IOSStyle_selectionFeedback();
+    [delegate_ commandBarEditKey:edit_index_];
+  }
 }
 
 - (void)forgetDelegate
@@ -356,8 +386,12 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   NSArray<GHOSTIOSModifierKeyView *> *keys_;
   NSMutableArray<GHOSTIOSCommandKeyButton *> *context_keys_;
   GHOST_IOSBarKey context_key_info_[GHOST_IOS_BAR_KEY_MAX];
+  /* The bar's own copies, so keys stay valid when the caller reuses its buffers. */
+  char context_key_titles_[GHOST_IOS_BAR_KEY_MAX][32];
+  char context_key_commands_[GHOST_IOS_BAR_KEY_MAX][GHOST_IOS_COMMAND_MAX];
   int context_key_count_;
   UIView *separator_;
+  NSArray<UIButton *> *action_buttons_;
   UIButton *settings_button_;
   /** Sibling of the bar in the input view, so it can sit beside the bar. */
   UIView *key_pad_;
@@ -458,6 +492,41 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   separator_.translatesAutoresizingMaskIntoConstraints = NO;
   separator_.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.25f];
   separator_.hidden = !expanded_;
+
+  struct ActionInfo {
+    GHOST_IOSBarAction action;
+    NSString *symbol;
+    NSString *title;
+    NSString *identifier;
+  };
+  static const ActionInfo action_infos[] = {
+      {GHOST_IOSBarAction::Focus, @"arrow.up.left.and.arrow.down.right", @"Focus mode",
+       @"blender_command_bar_focus"},
+      {GHOST_IOSBarAction::Properties, @"slider.horizontal.3", @"Properties",
+       @"blender_command_bar_properties"},
+      {GHOST_IOSBarAction::Outliner, @"list.bullet.indent", @"Outliner",
+       @"blender_command_bar_outliner"},
+  };
+  NSMutableArray<UIButton *> *action_buttons = [NSMutableArray array];
+  for (const ActionInfo &info : action_infos) {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    [button setImage:GHOST_IOSModifierSymbol(info.symbol, 16.0f) forState:UIControlStateNormal];
+    button.tintColor = UIColor.whiteColor;
+    button.tag = NSInteger(info.action);
+    button.accessibilityLabel = info.title;
+    button.accessibilityIdentifier = info.identifier;
+    button.hidden = YES;
+    [button addTarget:self
+                  action:@selector(handleActionButton:)
+        forControlEvents:UIControlEventTouchUpInside];
+    [NSLayoutConstraint activateConstraints:@[
+      [button.widthAnchor constraintEqualToConstant:key_width],
+      [button.heightAnchor constraintEqualToConstant:command_key_height],
+    ]];
+    [action_buttons addObject:button];
+  }
+  action_buttons_ = [action_buttons copy];
 
   settings_button_ = [[UIButton buttonWithType:UIButtonTypeSystem] retain];
   settings_button_.translatesAutoresizingMaskIntoConstraints = NO;
@@ -562,6 +631,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   [keys_ release];
   [context_keys_ release];
   [separator_ release];
+  [action_buttons_ release];
   [settings_button_ release];
   [key_pad_ release];
   [key_pad_keys_ release];
@@ -614,6 +684,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   NSMutableArray<UIView *> *views = [NSMutableArray arrayWithArray:keys_];
   [views addObject:separator_];
   [views addObjectsFromArray:context_keys_];
+  [views addObjectsFromArray:action_buttons_];
   [views addObject:settings_button_];
   return views;
 }
@@ -790,6 +861,12 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
                    completion:nil];
 }
 
+- (void)handleActionButton:(UIButton *)sender
+{
+  GHOST_IOSStyle_selectionFeedback();
+  [delegate_ commandBarAction:GHOST_IOSBarAction(sender.tag)];
+}
+
 - (void)handlePan:(UIPanGestureRecognizer *)sender
 {
   UIView *parent = self.superview;
@@ -901,8 +978,12 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   count = std::max(0, std::min(count, GHOST_IOS_BAR_KEY_MAX));
   bool same = count == context_key_count_;
   for (int i = 0; same && i < count; i++) {
-    same = context_key_info_[i].stroke.key == keys[i].stroke.key &&
-           context_key_info_[i].stroke.modifiers == keys[i].stroke.modifiers;
+    const GHOST_IOSBarKey &old_key = context_key_info_[i];
+    same = old_key.stroke.key == keys[i].stroke.key &&
+           old_key.stroke.modifiers == keys[i].stroke.modifiers &&
+           std::strcmp(old_key.title, keys[i].title) == 0 &&
+           (old_key.command == nullptr) == (keys[i].command == nullptr) &&
+           (old_key.command == nullptr || std::strcmp(old_key.command, keys[i].command) == 0);
   }
   if (same) {
     return;
@@ -915,14 +996,22 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   [context_keys_ removeAllObjects];
   context_key_count_ = count;
   for (int i = 0; i < count; i++) {
-    context_key_info_[i] = keys[i];
+    GHOST_IOSBarKey &copy = context_key_info_[i];
+    copy = keys[i];
+    std::snprintf(context_key_titles_[i], sizeof(context_key_titles_[i]), "%s", keys[i].title);
+    copy.title = context_key_titles_[i];
+    if (keys[i].command != nullptr) {
+      std::snprintf(context_key_commands_[i], GHOST_IOS_COMMAND_MAX, "%s", keys[i].command);
+      copy.command = context_key_commands_[i];
+    }
     NSString *identifier = [NSString stringWithFormat:@"blender_command_key_%d", i];
-    GHOSTIOSCommandKeyButton *key = [GHOSTIOSCommandKeyButton keyWithInfo:keys[i]
+    GHOSTIOSCommandKeyButton *key = [GHOSTIOSCommandKeyButton keyWithInfo:copy
                                                                  delegate:delegate_
                                                                     width:key_width
                                                                    height:command_key_height
                                                                identifier:identifier];
     key.hidden = !expanded_;
+    [key setEditIndex:i];
     [context_keys_ addObject:key];
   }
   [self arrangeForCorner];

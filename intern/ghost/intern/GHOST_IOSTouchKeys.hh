@@ -39,6 +39,8 @@ enum class GHOST_IOSSlotKind : uint8_t {
   Key,
   /** Toggle Ctrl on for the next strokes, which inverts sculpt and paint brushes. */
   InvertBrush,
+  /** Queue #GHOST_IOSPaletteSlot::command, an operator call set up by the user. */
+  Command,
 };
 
 struct GHOST_IOSPaletteSlot {
@@ -47,6 +49,8 @@ struct GHOST_IOSPaletteSlot {
   const char *symbol;
   GHOST_IOSSlotKind kind;
   GHOST_IOSKeyStroke stroke;
+  /** Operator call for #GHOST_IOSSlotKind::Command, see #GHOST_IOSCommand_format. */
+  const char *command = nullptr;
 };
 
 constexpr int GHOST_IOS_PALETTE_SLOT_COUNT = 8;
@@ -237,6 +241,8 @@ inline GHOST_IOSPalettePoint GHOST_IOSPalette_clampCenter(const GHOST_IOSPalette
 struct GHOST_IOSBarKey {
   const char *title;
   GHOST_IOSKeyStroke stroke;
+  /** An operator call to queue instead of the stroke, for keys the user replaced. */
+  const char *command = nullptr;
 };
 
 constexpr int GHOST_IOS_BAR_KEY_MAX = 6;

@@ -6,6 +6,7 @@
  * nullability qualifiers. UIKit makes Clang request them for every pointer. */
 #pragma clang diagnostic ignored "-Wnullability-completeness"
 
+#include "GHOST_IOSMenuBar.hh"
 #include "GHOST_SystemIOS.hh"
 
 #include "GHOST_ContextIOS.hh"
@@ -80,6 +81,15 @@ static BOOL IOS_open_document_url(NSURL *url);
   (void)application;
   (void)options;
   return IOS_open_document_url(url);
+}
+
+/* Blender's menus in the iPadOS menu bar. */
+- (void)buildMenuWithBuilder:(id<UIMenuBuilder>)builder
+{
+  [super buildMenuWithBuilder:builder];
+  if (builder.system == UIMenuSystem.mainSystem) {
+    GHOST_IOSMenuBar_build(builder);
+  }
 }
 
 - (void)applicationWillTerminate:(UIApplication *)application

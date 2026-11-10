@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 enum class GHOST_IOSEditor : uint8_t {
@@ -35,6 +36,25 @@ enum class GHOST_IOSMode : uint8_t {
 
 constexpr int GHOST_IOS_IDNAME_MAX = 64;
 constexpr int GHOST_IOS_COMMAND_MAX = 256;
+constexpr int GHOST_IOS_RESIZE_EDGE_MAX = 8;
+
+/**
+ * The draggable edge of a visible sidebar or toolbar, in GHOST client pixels (origin top left).
+ * Dragging horizontally from (#x, any y in #y_min..#y_max) resizes the region in Blender.
+ */
+struct GHOST_IOSResizeEdge {
+  int x = 0;
+  int y_min = 0;
+  int y_max = 0;
+  /** The region lies to the right of the edge, like the N sidebar. */
+  bool region_on_right = false;
+
+  bool operator==(const GHOST_IOSResizeEdge &other) const
+  {
+    return x == other.x && y_min == other.y_min && y_max == other.y_max &&
+           region_on_right == other.region_on_right;
+  }
+};
 
 struct GHOST_IOSInteractionContext {
   GHOST_IOSEditor editor = GHOST_IOSEditor::Other;
@@ -45,13 +65,28 @@ struct GHOST_IOSInteractionContext {
   char modal_operator[GHOST_IOS_IDNAME_MAX] = "";
   /** Active tool of the editor under the pointer, such as `builtin.move`. */
   char tool[GHOST_IOS_IDNAME_MAX] = "";
+  /** Resizable sidebars and toolbars in the whole window. */
+  GHOST_IOSResizeEdge resize_edges[GHOST_IOS_RESIZE_EDGE_MAX];
+  int resize_edges_num = 0;
 
   bool operator==(const GHOST_IOSInteractionContext &other) const
   {
     return editor == other.editor && mode == other.mode &&
            over_main_region == other.over_main_region &&
            std::strcmp(modal_operator, other.modal_operator) == 0 &&
-           std::strcmp(tool, other.tool) == 0;
+           std::strcmp(tool, other.tool) == 0 && sameResizeEdges(other);
+  }
+  bool sameResizeEdges(const GHOST_IOSInteractionContext &other) const
+  {
+    if (resize_edges_num != other.resize_edges_num) {
+      return false;
+    }
+    for (int i = 0; i < resize_edges_num; i++) {
+      if (!(resize_edges[i] == other.resize_edges[i])) {
+        return false;
+      }
+    }
+    return true;
   }
   bool operator!=(const GHOST_IOSInteractionContext &other) const
   {
@@ -62,6 +97,11 @@ struct GHOST_IOSInteractionContext {
 /**
  * An operator call: the operator id on the first line, then one `name=value` property per line.
  * Values are strings; the window manager converts them to the property's type.
+ *
+ * A line `@x,y` (GHOST client pixels) runs the call in the area at that point instead of the area
+ * under the pointer. Ids starting with `ios.` are handled by the window manager's iOS shim:
+ * - `ios.open_editor` with `space=PROPERTIES` or `space=OUTLINER` opens a floating editor.
+ * - `ios.touch_spacing` with `enabled=1` or `enabled=0` sets the touch spacing preset.
  */
 inline bool GHOST_IOSCommand_format(char command[GHOST_IOS_COMMAND_MAX],
                                     const char *idname,
@@ -83,6 +123,36 @@ inline bool GHOST_IOSCommand_format(char command[GHOST_IOS_COMMAND_MAX],
     std::strcat(command, property);
     std::strcat(command, "=");
     std::strcat(command, value);
+  }
+  return true;
+}
+
+/** Like #GHOST_IOSCommand_format, aimed at the area at (\a x, \a y) in GHOST client pixels. */
+inline bool GHOST_IOSCommand_formatAt(char command[GHOST_IOS_COMMAND_MAX],
+                                      const int x,
+                                      const int y,
+                                      const char *idname,
+                                      const char *property = nullptr,
+                                      const char *value = nullptr)
+{
+  char target[32];
+  std::snprintf(target, sizeof(target), "\n@%d,%d", x, y);
+  char rest[GHOST_IOS_COMMAND_MAX];
+  if (!GHOST_IOSCommand_format(rest, idname, property, value)) {
+    command[0] = '\0';
+    return false;
+  }
+  const char *newline = std::strchr(rest, '\n');
+  const size_t idname_len = newline != nullptr ? size_t(newline - rest) : std::strlen(rest);
+  if (std::strlen(rest) + std::strlen(target) >= size_t(GHOST_IOS_COMMAND_MAX)) {
+    command[0] = '\0';
+    return false;
+  }
+  std::memcpy(command, rest, idname_len);
+  command[idname_len] = '\0';
+  std::strcat(command, target);
+  if (newline != nullptr) {
+    std::strcat(command, newline);
   }
   return true;
 }

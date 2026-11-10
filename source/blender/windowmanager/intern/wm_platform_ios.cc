@@ -12,13 +12,18 @@
 #include "BKE_screen.hh"
 #include "BKE_wm_runtime.hh"
 #include "BLI_listbase_iterator.hh"
+#include "BLI_math_vector.h"
+#include "BLI_rect.h"
 #include "BLI_path_utils.hh"
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
+#include "BLT_translation.hh"
 #include "BPY_extern_run.hh"
 
 #include "DNA_action_types.h"
 #include "DNA_object_types.h"
+#include "DNA_theme_types.h"
+#include "DNA_userdef_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
 #include "DNA_windowmanager_types.h"
@@ -33,6 +38,7 @@
 #include "GHOST_IOSInteraction.hh"
 
 #include "wm_event_system.hh"
+#include "wm_window.hh"
 
 namespace blender {
 
@@ -189,6 +195,44 @@ static GHOST_IOSMode wm_ios_mode(const Main &bmain, wmWindow &win, const ScrArea
   return wm_ios_object_mode(BKE_view_layer_active_object_get(view_layer));
 }
 
+/**
+ * The draggable edges of visible sidebars and toolbars, for the native grab handles. Blender's own
+ * resize zone sits on the region's inner edge (see `region_azone_edge`).
+ */
+static void wm_ios_resize_edges(wmWindow &win, bScreen &screen, GHOST_IOSInteractionContext &context)
+{
+  context.resize_edges_num = 0;
+  for (ScrArea &area : screen.areabase) {
+    for (ARegion &region : area.regionbase) {
+      if (context.resize_edges_num == GHOST_IOS_RESIZE_EDGE_MAX) {
+        return;
+      }
+      if (!ELEM(region.regiontype, RGN_TYPE_UI, RGN_TYPE_TOOLS) || region.runtime == nullptr || region.runtime->visible == 0 ||
+          (region.flag & (RGN_FLAG_HIDDEN | RGN_FLAG_TOO_SMALL)) ||
+          BLI_rcti_size_x(&region.winrct) <= 1)
+      {
+        continue;
+      }
+      const int align = RGN_ALIGN_ENUM_FROM_MASK(region.alignment);
+      if (!ELEM(align, RGN_ALIGN_LEFT, RGN_ALIGN_RIGHT)) {
+        continue;
+      }
+      /* A left-aligned region resizes from its right edge, and the other way around. */
+      int x = align == RGN_ALIGN_LEFT ? region.winrct.xmax : region.winrct.xmin;
+      int y_top = region.winrct.ymax;
+      int x_bottom = x;
+      int y_bottom = region.winrct.ymin;
+      wm_cursor_position_to_ghost_client_coords(&win, &x, &y_top);
+      wm_cursor_position_to_ghost_client_coords(&win, &x_bottom, &y_bottom);
+      GHOST_IOSResizeEdge &edge = context.resize_edges[context.resize_edges_num++];
+      edge.x = x;
+      edge.y_min = y_top;
+      edge.y_max = y_bottom;
+      edge.region_on_right = align == RGN_ALIGN_RIGHT;
+    }
+  }
+}
+
 static GHOST_IOSInteractionContext wm_ios_interaction_context(const Main &bmain, wmWindow &win)
 {
   GHOST_IOSInteractionContext context;
@@ -218,6 +262,8 @@ static GHOST_IOSInteractionContext wm_ios_interaction_context(const Main &bmain,
   context.mode = wm_ios_mode(bmain, win, area);
   const ARegion *region = BKE_area_find_region_xy(area, RGN_TYPE_ANY, eventstate->xy);
   context.over_main_region = region != nullptr && region->regiontype == RGN_TYPE_WINDOW;
+
+  wm_ios_resize_edges(win, *screen, context);
 
   WorkSpace *workspace = WM_window_get_active_workspace(&win);
   bToolKey tkey;
@@ -271,29 +317,112 @@ static void wm_ios_command_property(bContext *C,
   }
 }
 
-/** Run a queued call as if from a hotkey in the editor under the pointer. */
-static void wm_ios_run_command(bContext *C, wmWindow &win, char *command)
+/** Spacing in #uiStyle before the touch preset changed it, to restore it exactly. */
+struct WMIOSStyleSpacing {
+  bool saved = false;
+  short columnspace, templatespace, boxspace, buttonspacex, buttonspacey, panelspace, panelouter;
+  float widget_points, grouplabel_points, paneltitle_points;
+};
+static WMIOSStyleSpacing wm_ios_default_spacing;
+
+/**
+ * Touch spacing preset: more room between buttons, rows and panels, so a finger lands on the
+ * intended one, and slightly larger text. The global UI scale is left alone.
+ */
+static void wm_ios_set_touch_spacing(const bool enabled)
 {
-  char *line = command;
-  char *next = strchr(line, '\n');
-  if (next != nullptr) {
-    *next++ = '\0';
-  }
-  wmOperatorType *ot = WM_operatortype_find(line, true);
-  if (ot == nullptr) {
+  uiStyle *style = static_cast<uiStyle *>(U.uistyles.first);
+  if (style == nullptr) {
     return;
   }
-  PointerRNA ptr = WM_operator_properties_create_ptr(ot);
-  while (next != nullptr) {
-    line = next;
-    next = strchr(line, '\n');
-    if (next != nullptr) {
-      *next++ = '\0';
+  WMIOSStyleSpacing &spacing = wm_ios_default_spacing;
+  if (!spacing.saved) {
+    spacing = {true,
+               style->columnspace,
+               style->templatespace,
+               style->boxspace,
+               style->buttonspacex,
+               style->buttonspacey,
+               style->panelspace,
+               style->panelouter,
+               style->widget.points,
+               style->grouplabel.points,
+               style->paneltitle.points};
+  }
+  const float factor = enabled ? 2.0f : 1.0f;
+  style->columnspace = short(spacing.columnspace * factor);
+  style->templatespace = short(spacing.templatespace * factor);
+  style->boxspace = short(spacing.boxspace * factor);
+  style->buttonspacex = short(spacing.buttonspacex * factor);
+  style->buttonspacey = short(spacing.buttonspacey * factor + (enabled ? 4 : 0));
+  style->panelspace = short(spacing.panelspace * factor);
+  style->panelouter = short(spacing.panelouter * factor);
+  const float text_factor = enabled ? 1.15f : 1.0f;
+  style->widget.points = spacing.widget_points * text_factor;
+  style->grouplabel.points = spacing.grouplabel_points * text_factor;
+  style->paneltitle.points = spacing.paneltitle_points * text_factor;
+  WM_main_add_notifier(NC_WINDOW, nullptr);
+}
+
+/** Commands for the touch layer that are not operators. */
+static bool wm_ios_run_builtin(bContext *C, const char *idname, const char *name, const char *value)
+{
+  if (STREQ(idname, "ios.touch_spacing")) {
+    wm_ios_set_touch_spacing(name != nullptr && STREQ(name, "enabled") && STREQ(value, "1"));
+    return true;
+  }
+  if (STREQ(idname, "ios.open_editor")) {
+    if (name == nullptr || !STREQ(name, "space")) {
+      return true;
     }
-    char *value = strchr(line, '=');
-    if (value != nullptr) {
-      *value++ = '\0';
-      wm_ios_command_property(C, &ptr, line, value);
+    if (STREQ(value, "PROPERTIES")) {
+      WM_window_open_temp(C, IFACE_("Properties"), SPACE_PROPERTIES, false);
+    }
+    else if (STREQ(value, "OUTLINER")) {
+      WM_window_open_temp(C, IFACE_("Outliner"), SPACE_OUTLINER, false);
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Split off the next line of \a text, which is changed in place. */
+static char *wm_ios_next_line(char **text)
+{
+  char *line = *text;
+  if (line == nullptr) {
+    return nullptr;
+  }
+  char *newline = strchr(line, '\n');
+  if (newline != nullptr) {
+    *newline = '\0';
+    *text = newline + 1;
+  }
+  else {
+    *text = nullptr;
+  }
+  return line;
+}
+
+/** Run a queued call as if from a hotkey in the editor under the pointer, or under `@x,y`. */
+static void wm_ios_run_command(bContext *C, wmWindow &win, char *command)
+{
+  char *rest = command;
+  const char *idname = wm_ios_next_line(&rest);
+  int xy[2];
+  bool has_xy = false;
+  if (win.runtime->eventstate != nullptr) {
+    copy_v2_v2_int(xy, win.runtime->eventstate->xy);
+    has_xy = true;
+  }
+  if (rest != nullptr && rest[0] == '@') {
+    char *target = wm_ios_next_line(&rest);
+    int x = 0, y = 0;
+    if (sscanf(target + 1, "%d,%d", &x, &y) == 2) {
+      wm_cursor_position_from_ghost_client_coords(&win, &x, &y);
+      xy[0] = x;
+      xy[1] = y;
+      has_xy = true;
     }
   }
 
@@ -304,19 +433,39 @@ static void wm_ios_run_command(bContext *C, wmWindow &win, char *command)
   ScrArea *area = nullptr;
   ARegion *region = nullptr;
   bScreen *screen = WM_window_get_active_screen(&win);
-  if (screen != nullptr && win.runtime->eventstate != nullptr) {
-    area = BKE_screen_find_area_xy(screen, SPACE_TYPE_ANY, win.runtime->eventstate->xy);
+  if (screen != nullptr && has_xy) {
+    area = BKE_screen_find_area_xy(screen, SPACE_TYPE_ANY, xy);
     if (area != nullptr) {
-      region = BKE_area_find_region_xy(area, RGN_TYPE_WINDOW, win.runtime->eventstate->xy);
+      region = BKE_area_find_region_xy(area, RGN_TYPE_WINDOW, xy);
     }
   }
   CTX_wm_area_set(C, area);
   CTX_wm_region_set(C, region);
-  WM_operator_name_call_ptr(C, ot, wm::OpCallContext::InvokeDefault, &ptr, nullptr);
+
+  if (STRPREFIX(idname, "ios.")) {
+    char *line = wm_ios_next_line(&rest);
+    char *value = line != nullptr ? strchr(line, '=') : nullptr;
+    if (value != nullptr) {
+      *value++ = '\0';
+    }
+    wm_ios_run_builtin(C, idname, value != nullptr ? line : nullptr, value);
+  }
+  else if (wmOperatorType *ot = WM_operatortype_find(idname, true)) {
+    PointerRNA ptr = WM_operator_properties_create_ptr(ot);
+    while (char *line = wm_ios_next_line(&rest)) {
+      char *value = strchr(line, '=');
+      if (value != nullptr) {
+        *value++ = '\0';
+        wm_ios_command_property(C, &ptr, line, value);
+      }
+    }
+    WM_operator_name_call_ptr(C, ot, wm::OpCallContext::InvokeDefault, &ptr, nullptr);
+    WM_operator_properties_free(&ptr);
+  }
+
   CTX_wm_window_set(C, prev_win);
   CTX_wm_area_set(C, prev_area);
   CTX_wm_region_set(C, prev_region);
-  WM_operator_properties_free(&ptr);
 }
 
 void wm_ios_touch_channel_update(bContext *C)

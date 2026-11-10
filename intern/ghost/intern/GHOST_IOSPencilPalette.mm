@@ -16,6 +16,7 @@
 #import <os/log.h>
 
 #include "GHOST_IOSPencilPalette.hh"
+#include "GHOST_IOSSettingsSync.hh"
 #include "GHOST_IOSStyle.hh"
 
 #include <algorithm>
@@ -26,15 +27,8 @@ static constexpr CGFloat ring_radius = 88.0f;
 static constexpr CGFloat inner_radius = 30.0f;
 static constexpr CGFloat outer_radius = ring_radius + slot_size * 0.5f + 8.0f;
 static constexpr CGFloat screen_margin = 12.0f;
-
-static NSString *const GHOST_IOSPencilDoubleTapKey = @"GHOST_IOSPencilDoubleTap";
-static NSString *const GHOST_IOSPencilSqueezeKey = @"GHOST_IOSPencilSqueeze";
-static NSString *const GHOST_IOSPencilOnlyDrawingKey = @"GHOST_IOSPencilOnlyDrawing";
-static NSString *const GHOST_IOSTapGestureKeys[GHOST_IOS_TAP_GESTURE_COUNT] = {
-    @"GHOST_IOSTapGesture2",
-    @"GHOST_IOSTapGesture3",
-    @"GHOST_IOSTapGesture4",
-};
+/** Holding a slot this long edits it instead of running it. */
+static constexpr NSTimeInterval edit_hold_seconds = 0.6;
 
 static os_log_t GHOST_IOSPencilPaletteLog()
 {
@@ -138,6 +132,8 @@ static os_log_t GHOST_IOSPencilPaletteLog()
   int count_;
   CGPoint center_point_;
   int highlighted_;
+  /** The hold on a slot became an edit; lifting must not run the slot. */
+  BOOL edit_started_;
 }
 - (instancetype)initWithInputView:(UIView *)input_view
                          delegate:(id<GHOSTIOSPencilPaletteDelegate>)delegate;
@@ -193,6 +189,7 @@ static os_log_t GHOST_IOSPencilPaletteLog()
 
 - (void)teardown
 {
+  [NSObject cancelPreviousPerformRequestsWithTarget:self];
   [self removeGestureRecognizer:hover_];
   delegate_ = nil;
   slots_ = nullptr;
@@ -283,6 +280,27 @@ static os_log_t GHOST_IOSPencilPaletteLog()
       {center_point_.x, center_point_.y}, inner_radius, outer_radius, count_, {point.x, point.y});
 }
 
+- (void)holdTimerFired
+{
+  if (highlighted_ < 0 || self.hidden) {
+    return;
+  }
+  const int index = highlighted_;
+  edit_started_ = YES;
+  [self hide];
+  [delegate_ pencilPaletteEditSlot:index];
+}
+
+- (void)restartHoldTimer
+{
+  [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                           selector:@selector(holdTimerFired)
+                                             object:nil];
+  if (highlighted_ >= 0) {
+    [self performSelector:@selector(holdTimerFired) withObject:nil afterDelay:edit_hold_seconds];
+  }
+}
+
 - (void)highlight:(int)index
 {
   if (index == highlighted_) {
@@ -303,18 +321,31 @@ static os_log_t GHOST_IOSPencilPaletteLog()
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
   (void)event;
+  edit_started_ = NO;
   [self highlight:[self slotAtPoint:[touches.anyObject locationInView:self]]];
+  [self restartHoldTimer];
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
   (void)event;
+  const int previous = highlighted_;
   [self highlight:[self slotAtPoint:[touches.anyObject locationInView:self]]];
+  if (highlighted_ != previous) {
+    [self restartHoldTimer];
+  }
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
   (void)event;
+  [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                           selector:@selector(holdTimerFired)
+                                             object:nil];
+  if (edit_started_) {
+    edit_started_ = NO;
+    return;
+  }
   const int index = [self slotAtPoint:[touches.anyObject locationInView:self]];
   [self hide];
   if (index >= 0) {
@@ -326,6 +357,9 @@ static os_log_t GHOST_IOSPencilPaletteLog()
 {
   (void)touches;
   (void)event;
+  [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                           selector:@selector(holdTimerFired)
+                                             object:nil];
   [self highlight:-1];
 }
 
@@ -357,34 +391,13 @@ static os_log_t GHOST_IOSPencilPaletteLog()
 
 GHOST_IOSTouchSettings GHOST_IOSTouchSettings_load()
 {
-  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-  GHOST_IOSTouchSettings settings;
-  settings.double_tap = GHOST_IOSDoubleTapChoice_fromStored(
-      [defaults integerForKey:GHOST_IOSPencilDoubleTapKey]);
-  settings.squeeze = GHOST_IOSSqueezeChoice_fromStored(
-      [defaults integerForKey:GHOST_IOSPencilSqueezeKey]);
-  /* Until the user picks, follow the system "Only Draw with Apple Pencil" setting. */
-  settings.pencil_only_drawing = [defaults objectForKey:GHOST_IOSPencilOnlyDrawingKey] != nil ?
-                                     [defaults boolForKey:GHOST_IOSPencilOnlyDrawingKey] :
-                                     UIPencilInteraction.prefersPencilOnlyDrawing;
-  for (int i = 0; i < GHOST_IOS_TAP_GESTURE_COUNT; i++) {
-    if ([defaults objectForKey:GHOST_IOSTapGestureKeys[i]] != nil) {
-      settings.tap_gestures[i] = GHOST_IOSGestureAction_fromStored(
-          [defaults integerForKey:GHOST_IOSTapGestureKeys[i]], settings.tap_gestures[i]);
-    }
-  }
-  return settings;
+  return GHOST_IOSSettings_shared().touch;
 }
 
 void GHOST_IOSTouchSettings_save(const GHOST_IOSTouchSettings &settings)
 {
-  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-  [defaults setInteger:NSInteger(settings.double_tap) forKey:GHOST_IOSPencilDoubleTapKey];
-  [defaults setInteger:NSInteger(settings.squeeze) forKey:GHOST_IOSPencilSqueezeKey];
-  [defaults setBool:settings.pencil_only_drawing forKey:GHOST_IOSPencilOnlyDrawingKey];
-  for (int i = 0; i < GHOST_IOS_TAP_GESTURE_COUNT; i++) {
-    [defaults setInteger:NSInteger(settings.tap_gestures[i]) forKey:GHOST_IOSTapGestureKeys[i]];
-  }
+  GHOST_IOSSettings_shared().touch = settings;
+  GHOST_IOSSettings_save();
 }
 
 static GHOST_IOSSystemPencilAction GHOST_IOSPencil_systemAction(
@@ -481,6 +494,7 @@ static UIMenu *GHOST_IOSGestureMenu(NSString *title,
       {GHOST_IOSGestureAction::Undo, @"Undo"},
       {GHOST_IOSGestureAction::Redo, @"Redo"},
       {GHOST_IOSGestureAction::Search, @"Search"},
+      {GHOST_IOSGestureAction::Focus, @"Focus Mode"},
       {GHOST_IOSGestureAction::None, @"Nothing"},
   };
   NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
@@ -505,7 +519,8 @@ static UIMenu *GHOST_IOSGestureMenu(NSString *title,
 }
 
 UIMenu *GHOST_IOSTouchSettings_menu(const GHOST_IOSTouchSettings &settings,
-                                    void (^changed)(const GHOST_IOSTouchSettings &settings))
+                                    void (^changed)(const GHOST_IOSTouchSettings &settings),
+                                    void (^command)(GHOST_IOSSettingsMenuCommand command))
 {
   void (^apply)(GHOST_IOSTouchSettings) = ^(GHOST_IOSTouchSettings next) {
     GHOST_IOSTouchSettings_save(next);
@@ -563,6 +578,16 @@ UIMenu *GHOST_IOSTouchSettings_menu(const GHOST_IOSTouchSettings &settings,
   pencil_only_action.state = settings.pencil_only_drawing ? UIMenuElementStateOn :
                                                             UIMenuElementStateOff;
 
+  GHOST_IOSTouchSettings spacing = settings;
+  spacing.touch_spacing = !settings.touch_spacing;
+  UIAction *spacing_action = [UIAction actionWithTitle:@"Touch Spacing"
+                                                 image:GHOST_IOSStyle_symbol(@"hand.point.up", 15.0f)
+                                            identifier:nil
+                                               handler:^(UIAction *) {
+                                                 apply(spacing);
+                                               }];
+  spacing_action.state = settings.touch_spacing ? UIMenuElementStateOn : UIMenuElementStateOff;
+
   UIMenu *pencil = [UIMenu menuWithTitle:@""
                                    image:nil
                               identifier:nil
@@ -588,8 +613,43 @@ UIMenu *GHOST_IOSTouchSettings_menu(const GHOST_IOSTouchSettings &settings,
                                     GHOST_IOSGestureMenu(@"Two-Finger Tap", 0, settings, apply),
                                     GHOST_IOSGestureMenu(@"Three-Finger Tap", 1, settings, apply),
                                     GHOST_IOSGestureMenu(@"Four-Finger Tap", 2, settings, apply),
+                                    spacing_action,
                                   ]];
-  return [UIMenu menuWithTitle:@"Touch and Pencil" children:@[ pencil, gestures ]];
+  NSString *sync_folder = GHOST_IOSSettings_syncFolderName();
+  UIAction *choose_sync = [UIAction
+      actionWithTitle:sync_folder != nil ? @"Change Sync Folder…" : @"Sync Through a Folder…"
+                image:GHOST_IOSStyle_symbol(@"icloud", 15.0f)
+           identifier:nil
+              handler:^(UIAction *) {
+                command(GHOST_IOSSettingsMenuCommand::ChooseSyncFolder);
+              }];
+  if (sync_folder != nil) {
+    choose_sync.subtitle = [NSString stringWithFormat:@"Syncing with “%@”", sync_folder];
+  }
+  NSMutableArray<UIMenuElement *> *storage = [NSMutableArray arrayWithObject:choose_sync];
+  if (sync_folder != nil) {
+    [storage addObject:[UIAction actionWithTitle:@"Stop Syncing"
+                                           image:GHOST_IOSStyle_symbol(@"icloud.slash", 15.0f)
+                                      identifier:nil
+                                         handler:^(UIAction *) {
+                                           command(GHOST_IOSSettingsMenuCommand::StopSync);
+                                         }]];
+  }
+  UIAction *reset = [UIAction
+      actionWithTitle:@"Reset Custom Slots and Keys"
+                image:GHOST_IOSStyle_symbol(@"arrow.counterclockwise", 15.0f)
+           identifier:nil
+              handler:^(UIAction *) {
+                command(GHOST_IOSSettingsMenuCommand::ResetCustomizations);
+              }];
+  reset.attributes = UIMenuElementAttributesDestructive;
+  [storage addObject:reset];
+  UIMenu *storage_menu = [UIMenu menuWithTitle:@""
+                                         image:nil
+                                    identifier:nil
+                                       options:UIMenuOptionsDisplayInline
+                                      children:storage];
+  return [UIMenu menuWithTitle:@"Touch and Pencil" children:@[ pencil, gestures, storage_menu ]];
 }
 
 /** \} */

@@ -29,6 +29,16 @@ inline void GHOST_IOSCommandBar_canvasInsets(const bool visible,
   *r_trailing = docked_left ? 0.0 : inset;
 }
 
+/** Buttons below the shortcut keys. */
+enum class GHOST_IOSBarAction : uint8_t {
+  /** Toggle Focus mode for the editor under the pointer. */
+  Focus,
+  /** Open the Properties editor in a floating window. */
+  Properties,
+  /** Open the Outliner in a floating window. */
+  Outliner,
+};
+
 #ifdef __OBJC__
 
 #import <CoreGraphics/CoreGraphics.h>
@@ -51,7 +61,11 @@ inline void GHOST_IOSCommandBar_canvasInsets(const bool visible,
 /** The belt was hidden, for example because a hardware keyboard connected. */
 - (void)modifierBeltDidHide;
 /** A shortcut or key pad key was tapped. */
-- (void)commandBarKey:(GHOST_IOSKeyStroke)stroke;
+- (void)commandBarKey:(const GHOST_IOSBarKey &)key;
+/** Shortcut key \a index was held to replace it. */
+- (void)commandBarEditKey:(int)index;
+/** One of the Focus, Properties or Outliner buttons was tapped. */
+- (void)commandBarAction:(GHOST_IOSBarAction)action;
 @end
 
 /**

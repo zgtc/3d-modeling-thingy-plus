@@ -67,8 +67,10 @@ enum class GHOST_IOSGestureAction : uint8_t {
   Undo = 1,
   Redo = 2,
   Search = 3,
+  /** Toggle Focus mode: the editor under the pointer fills the window, panels hidden. */
+  Focus = 4,
 };
-constexpr int GHOST_IOS_GESTURE_ACTION_LAST = 3;
+constexpr int GHOST_IOS_GESTURE_ACTION_LAST = 4;
 
 /** Two-, three- and four-finger taps, in that order. */
 constexpr int GHOST_IOS_TAP_GESTURE_COUNT = 3;
@@ -78,6 +80,8 @@ struct GHOST_IOSTouchSettings {
   GHOST_IOSSqueezeChoice squeeze = GHOST_IOSSqueezeChoice::System;
   /** Like iPadOS "Only Draw with Apple Pencil": fingers navigate the viewport, never paint. */
   bool pencil_only_drawing = false;
+  /** More room between Blender's buttons, rows and panels, and larger text. On for touch. */
+  bool touch_spacing = true;
   GHOST_IOSGestureAction tap_gestures[GHOST_IOS_TAP_GESTURE_COUNT] = {
       GHOST_IOSGestureAction::Undo,
       GHOST_IOSGestureAction::Redo,

@@ -24,6 +24,8 @@
 @protocol GHOSTIOSPencilPaletteDelegate <NSObject>
 /** \a index is into the slots passed to #GHOST_IOSPencilPalette_show. The palette has closed. */
 - (void)pencilPaletteChoseSlot:(int)index;
+/** A slot was held to replace it. The palette has closed. */
+- (void)pencilPaletteEditSlot:(int)index;
 @end
 
 /** Add a hidden palette to \a input_view. The delegate is not retained. */
@@ -59,8 +61,19 @@ void GHOST_IOSPencil_askDoubleTap(UIViewController *presenter,
                                   CGPoint point,
                                   void (^chosen)(GHOST_IOSDoubleTapChoice choice));
 
-/** The settings menu for the command bar. \a changed runs with the new settings, already saved. */
+/** Settings menu entries that need the window, such as presenting a folder picker. */
+enum class GHOST_IOSSettingsMenuCommand : uint8_t {
+  ChooseSyncFolder,
+  StopSync,
+  ResetCustomizations,
+};
+
+/**
+ * The settings menu for the command bar. \a changed runs with the new settings, already saved;
+ * \a command runs for entries the window handles.
+ */
 UIMenu *GHOST_IOSTouchSettings_menu(const GHOST_IOSTouchSettings &settings,
-                                    void (^changed)(const GHOST_IOSTouchSettings &settings));
+                                    void (^changed)(const GHOST_IOSTouchSettings &settings),
+                                    void (^command)(GHOST_IOSSettingsMenuCommand command));
 
 #endif
