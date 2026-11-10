@@ -388,3 +388,40 @@ class GhostVirtualPointerIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PointerScreenCoordinateTests(unittest.TestCase):
+    """Blender reads cursor and trackpad event positions as screen coordinates and converts them
+    with screenToClient. Once the canvas is inset for the rail, header and quick bar, pushing
+    canvas (client) positions offsets every tap up and left of the drawn pointer (device
+    feedback on #5)."""
+
+    def test_cursor_events_are_pushed_in_screen_coordinates(self) -> None:
+        source = POINTER_SOURCE.read_text()
+        send = source[source.index("  void sendCursorEvent(const GHOST_TabletData &tablet)") :]
+        send = send[: send.index("\n  }\n")]
+        self.assertIn("constrainCursorForEvent(x, y);", send)
+        self.assertIn("window_->clientToScreen(x, y, x, y);", send)
+        self.assertLess(send.index("constrainCursorForEvent(x, y);"),
+                        send.index("window_->clientToScreen(x, y, x, y);"))
+        self.assertLess(send.index("window_->clientToScreen(x, y, x, y);"),
+                        send.index("GHOST_kEventCursorMove"))
+
+    def test_trackpad_events_are_pushed_in_screen_coordinates(self) -> None:
+        source = WINDOW_SOURCE.read_text()
+        generate = source[source.index("- (void)generateUserInputEvents:(const UserInputEvent &)event_info\n{") :]
+        generate = generate[: generate.index("\n}\n")]
+        self.assertIn("window->clientToScreen(", generate)
+        self.assertNotIn("event_info.location.x,\n", generate.split("switch (event_type)")[1])
+        self.assertIn("screen_x,", generate)
+        self.assertIn("screen_y,", generate)
+
+    def test_cursor_position_round_trips_through_screen_coordinates(self) -> None:
+        source = POINTER_SOURCE.read_text()
+        get = source[source.index("GHOST_TSuccess GHOST_IOSVirtualPointer::getCursorPosition(") :]
+        get = get[: get.index("\n}\n")]
+        self.assertIn("clientToScreen", get)
+        system = SYSTEM_SOURCE.read_text()
+        warp = system[system.index("GHOST_TSuccess GHOST_SystemIOS::setCursorPosition(") :]
+        warp = warp[: warp.index("\n}\n")]
+        self.assertIn("screenToClient", warp)

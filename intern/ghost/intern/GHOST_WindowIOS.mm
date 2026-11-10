@@ -1950,13 +1950,22 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
                     event_info.location.x,
                     event_info.location.y);
 
+      /* Trackpad events carry screen coordinates, like cursor events: Blender converts them back
+       * with screenToClient, which accounts for the canvas' inset. */
+      int32_t screen_x = 0;
+      int32_t screen_y = 0;
+      window->clientToScreen(int32_t(std::lround(event_info.location.x)),
+                             int32_t(std::lround(event_info.location.y)),
+                             screen_x,
+                             screen_y);
+
       switch (event_type) {
         case UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS:
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
                                                                   window,
                                                                   GHOST_kTrackpadEventScroll,
-                                                                  event_info.location.x,
-                                                                  event_info.location.y,
+                                                                  screen_x,
+                                                                  screen_y,
                                                                   event_info.translation.x,
                                                                   event_info.translation.y,
                                                                   true,
@@ -1966,8 +1975,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
                                                                   window,
                                                                   GHOST_kTrackpadEventScroll,
-                                                                  event_info.location.x,
-                                                                  event_info.location.y,
+                                                                  screen_x,
+                                                                  screen_y,
                                                                   event_info.translation.x,
                                                                   event_info.translation.y,
                                                                   true,
@@ -1978,8 +1987,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
                                                                   window,
                                                                   GHOST_kTrackpadEventScroll,
-                                                                  event_info.location.x,
-                                                                  event_info.location.y,
+                                                                  screen_x,
+                                                                  screen_y,
                                                                   event_info.translation.x,
                                                                   event_info.translation.y,
                                                                   true));
@@ -1988,8 +1997,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
                                                                   window,
                                                                   GHOST_kTrackpadEventMagnify,
-                                                                  event_info.location.x,
-                                                                  event_info.location.y,
+                                                                  screen_x,
+                                                                  screen_y,
                                                                   event_info.distance,
                                                                   0,
                                                                   false,
