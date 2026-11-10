@@ -386,3 +386,38 @@ class PinnedCommandBarTests(unittest.TestCase):
         load = self.window[self.window.index("- (void)viewDidLoad") :]
         load = load[: load.index("\n}\n")]
         self.assertNotIn("_view = (MTKView *)self.view;", load)
+
+
+class TouchLayoutDefaultsTests(unittest.TestCase):
+    """Factory layout for touch: a wider right column and a one-row timeline (device feedback)."""
+
+    DEFAULTS = REPOSITORY / "source" / "blender" / "blenloader" / "intern" / "versioning_defaults.cc"
+    PLATFORM = REPOSITORY / "build_files" / "ios" / "cmake" / "platform_ios.cmake"
+
+    def test_factory_startup_has_only_a_platform_hook(self) -> None:
+        source = self.DEFAULTS.read_text()
+        body = source[source.index("void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)\n{") :]
+        body = body[: body.index("\n}\n")]
+        self.assertIn("#ifdef BLENDER_PLATFORM_STARTUP_DEFAULTS_HOOK", body)
+        self.assertIn("BLENDER_PLATFORM_STARTUP_DEFAULTS_HOOK(bmain, app_template);", body)
+        self.assertIn(
+            "-DBLENDER_PLATFORM_STARTUP_DEFAULTS_HOOK=wm_ios_update_startup_defaults",
+            self.PLATFORM.read_text(),
+        )
+
+    def test_shim_widens_the_right_column_and_collapses_the_timeline(self) -> None:
+        shim = WM_SHIM.read_text()
+        column = shim[shim.index("static void wm_ios_widen_right_column(") :]
+        column = column[: column.index("\n}\n")]
+        self.assertIn("SPACE_OUTLINER", column)
+        self.assertIn("SPACE_PROPERTIES", column)
+        # Never more than half the screen, so the viewport stays the main area.
+        self.assertIn("screen_right / 2", column)
+        timeline = shim[shim.index("static void wm_ios_collapse_timeline(") :]
+        timeline = timeline[: timeline.index("\n}\n")]
+        self.assertIn("SACTCONT_TIMELINE", timeline)
+        self.assertIn("HEADERY", timeline)
+        update = shim[shim.index("void wm_ios_update_startup_defaults(") :]
+        update = update[: update.index("\n}\n")]
+        self.assertIn("wm_ios_widen_right_column(", update)
+        self.assertIn("wm_ios_collapse_timeline(", update)

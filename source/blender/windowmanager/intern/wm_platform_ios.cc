@@ -2,11 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
 #include "BKE_context.hh"
 #include "BKE_layer.hh"
+#include "BKE_main.hh"
 #include "BKE_screen.hh"
 #include "BKE_wm_runtime.hh"
 #include "BLI_listbase_iterator.hh"
@@ -15,6 +17,7 @@
 #include "BLI_utildefines.h"
 #include "BPY_extern_run.hh"
 
+#include "DNA_action_types.h"
 #include "DNA_object_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
@@ -333,6 +336,81 @@ void wm_ios_touch_channel_update(bContext *C)
       wm_ios_run_command(C, win, command);
     }
     GHOST_IOS_SetInteractionContext(ghost_window, wm_ios_interaction_context(*bmain, win));
+  }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Factory layout for touch
+ *
+ * Applied only to the factory startup file, never to files the user saved.
+ * \{ */
+
+/**
+ * Give the Outliner and Properties column on the right more room, so item names are not cut
+ * off at the touch UI scale. The column grows by a third, to at least a quarter of the screen,
+ * and never past half of it.
+ */
+static void wm_ios_widen_right_column(bScreen &screen)
+{
+  int screen_right = 0;
+  for (const ScrVert &vert : screen.vertbase) {
+    screen_right = std::max(screen_right, int(vert.vec.x));
+  }
+  int column_left = screen_right;
+  for (const ScrArea &area : screen.areabase) {
+    if (ELEM(area.spacetype, SPACE_OUTLINER, SPACE_PROPERTIES) && area.v4->vec.x == screen_right) {
+      column_left = std::min(column_left, int(area.v1->vec.x));
+    }
+  }
+  if (column_left <= 0 || column_left >= screen_right) {
+    return;
+  }
+  const int width = screen_right - column_left;
+  const int wanted = std::max(width * 4 / 3, screen_right / 4);
+  const int new_left = std::max(screen_right - wanted, screen_right / 2);
+  if (new_left >= column_left) {
+    return;
+  }
+  /* Areas share their corner vertices, so moving the edge resizes both sides of it. */
+  for (ScrVert &vert : screen.vertbase) {
+    if (vert.vec.x == column_left) {
+      vert.vec.x = short(new_left);
+    }
+  }
+}
+
+/** Shrink a timeline along the bottom of the screen to its header: a single row of controls. */
+static void wm_ios_collapse_timeline(bScreen &screen)
+{
+  for (ScrArea &area : screen.areabase) {
+    const SpaceAction *saction = area.spacetype == SPACE_ACTION ?
+                                     static_cast<const SpaceAction *>(area.spacedata.first) :
+                                     nullptr;
+    if (saction == nullptr || saction->mode != SACTCONT_TIMELINE || area.v1->vec.y != 0) {
+      continue;
+    }
+    const int top = area.v2->vec.y;
+    const int new_top = area.v1->vec.y + HEADERY + 1;
+    if (new_top >= top) {
+      continue;
+    }
+    const int left = area.v1->vec.x;
+    const int right = area.v4->vec.x;
+    for (ScrVert &vert : screen.vertbase) {
+      if (vert.vec.y == top && vert.vec.x >= left && vert.vec.x <= right) {
+        vert.vec.y = short(new_top);
+      }
+    }
+  }
+}
+
+void wm_ios_update_startup_defaults(Main *bmain, const char * /*app_template*/)
+{
+  for (bScreen &screen : bmain->screens) {
+    wm_ios_widen_right_column(screen);
+    wm_ios_collapse_timeline(screen);
   }
 }
 
