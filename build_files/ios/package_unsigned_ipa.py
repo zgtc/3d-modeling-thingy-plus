@@ -23,7 +23,8 @@ from audit import Finding, audit_abi, audit_bundle, macho_candidates
 
 
 EXPECTED_BUNDLE_ID = "org.blenderfoundation.blender.ios"
-EXPECTED_DEVICE_FAMILIES = {1, 2}
+# iPad only.
+EXPECTED_DEVICE_FAMILIES = {2}
 IPA_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 
@@ -52,7 +53,7 @@ def metadata_findings(bundle: Path) -> list[Finding]:
         findings.append(
             Finding(
                 "IPA-DEVICE-FAMILY",
-                f"expected iPhone and iPad families; found {sorted(families)}",
+                f"expected the iPad family only; found {sorted(families)}",
                 str(plist_path),
             )
         )

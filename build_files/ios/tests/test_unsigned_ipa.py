@@ -29,7 +29,7 @@ class UnsignedIpaTests(unittest.TestCase):
                     "CFBundleExecutable": "Blender",
                     "CFBundleIdentifier": "org.blenderfoundation.blender.ios",
                     "CFBundlePackageType": "APPL",
-                    "UIDeviceFamily": [1, 2],
+                    "UIDeviceFamily": [2],
                 },
                 handle,
             )
@@ -78,7 +78,7 @@ class UnsignedIpaTests(unittest.TestCase):
                 executable_mode = (
                     archive.getinfo("Payload/Blender.app/Blender").external_attr >> 16
                 )
-            self.assertEqual(set(packaged_plist["UIDeviceFamily"]), {1, 2})
+            self.assertEqual(set(packaged_plist["UIDeviceFamily"]), {2})
             self.assertNotEqual(executable_mode & 0o111, 0)
 
     def test_rejects_simulator_binary(self) -> None:

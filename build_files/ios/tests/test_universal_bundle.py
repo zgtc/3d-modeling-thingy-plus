@@ -32,9 +32,11 @@ class UniversalBundlePlistTests(unittest.TestCase):
             "org.blenderfoundation.blender.ios",
         )
 
-    def test_declares_iphone_and_ipad_device_families(self) -> None:
+    def test_declares_the_ipad_device_family_only(self) -> None:
+        # The app targets iPad only; iPhone is no longer a target.
         families = {int(value) for value in self.plist["UIDeviceFamily"]}
-        self.assertEqual(families, {IPHONE_FAMILY, IPAD_FAMILY})
+        self.assertEqual(families, {IPAD_FAMILY})
+        self.assertNotIn(IPHONE_FAMILY, families)
 
     def test_ipad_orientations_include_portrait_and_landscape(self) -> None:
         orientations = set(self.plist["UISupportedInterfaceOrientations~ipad"])
