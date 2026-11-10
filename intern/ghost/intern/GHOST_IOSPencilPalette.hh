@@ -26,6 +26,9 @@
 - (void)pencilPaletteChoseSlot:(int)index;
 /** A slot was held to replace it. The palette has closed. */
 - (void)pencilPaletteEditSlot:(int)index;
+@optional
+/** The middle of the ring was tapped: show the other page. The palette stays open. */
+- (void)pencilPaletteSwitchPage;
 @end
 
 /** Add a hidden palette to \a input_view. The delegate is not retained. */
@@ -41,6 +44,8 @@ void GHOST_IOSPencilPalette_show(NSObject *palette,
                                  const GHOST_IOSPaletteSlot *slots,
                                  int count);
 void GHOST_IOSPencilPalette_hide(NSObject *palette);
+/** SF Symbol in the middle of the ring, which switches pages when tapped. */
+void GHOST_IOSPencilPalette_setCenterSymbol(NSObject *palette, const char *symbol);
 bool GHOST_IOSPencilPalette_isVisible(NSObject *palette);
 bool GHOST_IOSPencilPalette_containsView(NSObject *palette, UIView *view);
 

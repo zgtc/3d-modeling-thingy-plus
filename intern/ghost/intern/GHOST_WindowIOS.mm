@@ -11,6 +11,7 @@
 #include "GHOST_ContextIOS.hh"
 #include "GHOST_IOSFileAccess.hh"
 #include "GHOST_IOSInputTuning.hh"
+#include "GHOST_IOSHeaderDock.hh"
 #include "GHOST_IOSInteraction.hh"
 #include "GHOST_IOSMenuBar.hh"
 #include "GHOST_IOSModifierBelt.hh"
@@ -345,7 +346,8 @@ typedef struct UserInputEvent {
                                       UITextFieldDelegate,
                                       GHOSTIOSModifierBeltDelegate,
                                       GHOSTIOSPencilPaletteDelegate,
-                                      GHOSTIOSResizeHandlesDelegate>
+                                      GHOSTIOSResizeHandlesDelegate,
+                                      GHOSTIOSHeaderDockDelegate>
 {
   GHOST_SystemIOS *system;
   GHOST_WindowIOS *window;
@@ -401,6 +403,22 @@ typedef struct UserInputEvent {
   /* On-screen command bar: modifiers, shortcut keys and the transform key pad. */
   NSObject *modifier_belt;
   GHOST_IOSModifierLatch *modifier_latch;
+
+  /* Native header in place of Blender's top bar (iPad). */
+  NSObject *header_dock;
+  /* Tools shown on the rail, kept while the pointer is outside the 3D Viewport. */
+  const GHOST_IOSToolItem *rail_tools;
+  int rail_tools_count;
+  /* Minimize control at the right end of the timeline. */
+  UIButton *timeline_button;
+  /** Timeline height when the quick bar's divider drag began, and the last height sent. */
+  int timeline_drag_start;
+  int timeline_drag_sent;
+  /* The squeeze palette's Tools page, and where the palette was opened. */
+  bool palette_tools_page;
+  CGPoint palette_point;
+  GHOST_IOSPaletteSlot palette_tool_slots[GHOST_IOS_PALETTE_SLOT_COUNT];
+  char palette_tool_commands[GHOST_IOS_PALETTE_SLOT_COUNT][GHOST_IOS_COMMAND_MAX];
 
   /* Grab handles on sidebar and toolbar edges. */
   NSObject *resize_handles;
@@ -663,6 +681,12 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   resize_handles = nil;
   resize_handle_dragging = false;
   settings_observer = nil;
+  header_dock = nil;
+  rail_tools = nullptr;
+  rail_tools_count = 0;
+  timeline_button = nil;
+  palette_tools_page = false;
+  palette_point = CGPointZero;
   pencil_palette = nil;
   pencil_palette_slots = nullptr;
   touch_settings = GHOST_IOSTouchSettings_load();
@@ -701,6 +725,14 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   pencil_palette_slots = nullptr;
   GHOST_IOSResizeHandles_destroy(resize_handles);
   resize_handles = nil;
+  GHOST_IOSHeaderDock_destroy(header_dock);
+  header_dock = nil;
+  if (timeline_button != nil) {
+    [timeline_button removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
+    [timeline_button removeFromSuperview];
+    [timeline_button release];
+    timeline_button = nil;
+  }
   if (settings_observer != nil) {
     [NSNotificationCenter.defaultCenter removeObserver:settings_observer];
     [settings_observer release];
@@ -858,6 +890,20 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   modifier_belt = GHOST_IOSModifierBelt_create(window->getView(), self);
   pencil_palette = GHOST_IOSPencilPalette_create(window->getView(), self);
   resize_handles = GHOST_IOSResizeHandles_create(window->getView(), self);
+  if (window->isMainWindow() &&
+      UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad)
+  {
+    /* iPad only: the iPhone keeps Blender's own top bar and tool shelf. */
+    header_dock = GHOST_IOSHeaderDock_create(window->getView(), self);
+    if (header_dock != nil) {
+      char command[GHOST_IOS_COMMAND_MAX];
+      GHOST_IOSCommand_format(command, "ios.native_chrome", "enabled", "1");
+      [self queueCommand:command];
+      [self createTimelineButton];
+      /* The window manager applies the saved timeline state on its first loop pass. */
+      [self applyTimeline];
+    }
+  }
   GHOSTUIWindow *ui_window = self;
   settings_observer = [[NSNotificationCenter.defaultCenter
       addObserverForName:GHOST_IOSTouchSettingsDidChangeNotification
@@ -913,7 +959,13 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
 {
   const bool spacing_changed = GHOST_IOSSettings_shared().touch.touch_spacing !=
                                touch_settings.touch_spacing;
+  const bool timeline_changed = GHOST_IOSSettings_shared().touch.timeline_minimized !=
+                                touch_settings.timeline_minimized;
   touch_settings = GHOST_IOSSettings_shared().touch;
+  if (timeline_changed && timeline_button != nil) {
+    [self updateTimelineButton];
+    [self applyTimeline];
+  }
   [self updateSettingsMenu];
   [self updateCommandBarForContext];
   if (spacing_changed) {
@@ -998,6 +1050,15 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
 {
   custom_bar.build(interaction_context, GHOST_IOSSettings_shared());
   GHOST_IOSModifierBelt_setContextKeys(modifier_belt, custom_bar.keys, custom_bar.count);
+  /* The rail's tools follow the 3D Viewport; elsewhere they keep the last viewport's. */
+  if (interaction_context.editor == GHOST_IOSEditor::View3D) {
+    rail_tools = GHOST_IOSDock_tools(interaction_context, &rail_tools_count);
+  }
+  GHOST_IOSModifierBelt_setTools(
+      modifier_belt,
+      rail_tools,
+      rail_tools_count,
+      GHOST_IOSDock_activeIndex(rail_tools, rail_tools_count, interaction_context.tool));
   GHOST_IOSModifierBelt_setKeyPadVisible(modifier_belt,
                                          GHOST_IOSCommandBar_wantsKeyPad(interaction_context));
 }
@@ -1011,6 +1072,8 @@ static bool modifierForKey(const GHOST_TKey key, GHOST_TModifierKey &modifier)
   interaction_context = context;
   tool_history.update(context);
   [self updateCommandBarForContext];
+  GHOST_IOSHeaderDock_setContext(header_dock, context);
+  [self updateTimelineButton];
   if (self.isKeyWindow) {
     GHOST_IOSMenuBar_setContext(context);
   }
@@ -1261,7 +1324,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 
 - (void)pencilPaletteEditSlot:(int)index
 {
-  if (index < 0 || index >= GHOST_IOS_PALETTE_SLOT_COUNT) {
+  /* Tools follow Blender's tool system; only the commands page can be customized. */
+  if (palette_tools_page || index < 0 || index >= GHOST_IOS_PALETTE_SLOT_COUNT) {
     return;
   }
   char name[GHOST_IOS_CUSTOM_NAME_MAX];
@@ -1301,13 +1365,47 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   [self applyModifierLatch];
 }
 
-/** \a point is in view points. */
+- (void)headerDockQueueCommand:(const char *)command
+{
+  [self queueCommand:command];
+}
+
+/** \a point is in view points. Opens on the commands page. */
 - (void)showPencilPaletteAt:(CGPoint)point
 {
-  custom_palette.build(interaction_context, GHOST_IOSSettings_shared());
-  pencil_palette_slots = custom_palette.slots;
-  GHOST_IOSPencilPalette_show(
-      pencil_palette, point, pencil_palette_slots, GHOST_IOS_PALETTE_SLOT_COUNT);
+  palette_tools_page = false;
+  palette_point = point;
+  [self showPalettePage];
+}
+
+- (void)showPalettePage
+{
+  int count = GHOST_IOS_PALETTE_SLOT_COUNT;
+  if (palette_tools_page) {
+    count = GHOST_IOSPalette_toolSlots(
+        interaction_context, palette_tool_slots, palette_tool_commands);
+    pencil_palette_slots = palette_tool_slots;
+  }
+  else {
+    custom_palette.build(interaction_context, GHOST_IOSSettings_shared());
+    pencil_palette_slots = custom_palette.slots;
+  }
+  /* The middle shows the page a tap switches to. */
+  GHOST_IOSPencilPalette_setCenterSymbol(pencil_palette,
+                                         palette_tools_page ? "command" : "hammer");
+  GHOST_IOSPencilPalette_show(pencil_palette, palette_point, pencil_palette_slots, count);
+}
+
+/* The Tools page holds the tool shelf's tools, so the left of the viewport can stay clear. */
+- (void)pencilPaletteSwitchPage
+{
+  int count = 0;
+  GHOST_IOSDock_tools(interaction_context, &count);
+  if (!palette_tools_page && count == 0) {
+    return;
+  }
+  palette_tools_page = !palette_tools_page;
+  [self showPalettePage];
 }
 
 - (void)runPencilAction:(GHOST_IOSPencilAction)action at:(CGPoint)view_point
@@ -1392,6 +1490,122 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     [self queueCommand:command];
   }
 }
+
+- (void)commandBarTool:(int)index
+{
+  if (rail_tools == nullptr || index < 0 || index >= rail_tools_count) {
+    return;
+  }
+  char command[GHOST_IOS_COMMAND_MAX];
+  if (GHOST_IOSTool_command(rail_tools[index], command)) {
+    [self queueCommand:command];
+  }
+}
+
+/* -------------------------------------------------------------------- */
+/** \name Timeline minimize control
+ * \{ */
+
+- (void)createTimelineButton
+{
+  timeline_button = [[UIButton buttonWithType:UIButtonTypeSystem] retain];
+  timeline_button.tintColor = UIColor.whiteColor;
+  timeline_button.backgroundColor = [UIColor colorWithWhite:0.33f alpha:0.9f];
+  timeline_button.layer.cornerRadius = 8.0f;
+  timeline_button.layer.cornerCurve = kCACornerCurveContinuous;
+  timeline_button.accessibilityIdentifier = @"blender_timeline_minimize";
+  timeline_button.hidden = YES;
+  [timeline_button addTarget:self
+                      action:@selector(toggleTimeline)
+            forControlEvents:UIControlEventTouchUpInside];
+  [window->getView() addSubview:timeline_button];
+  [self updateTimelineButton];
+}
+
+/** Put the control at the right end of the timeline's header row, in view points. */
+- (void)updateTimelineButton
+{
+  if (timeline_button == nil || window == nullptr) {
+    return;
+  }
+  const bool minimized = touch_settings.timeline_minimized;
+  [timeline_button setImage:GHOST_IOSStyle_symbol(minimized ? @"chevron.up" : @"chevron.down",
+                                                  13.0)
+                   forState:UIControlStateNormal];
+  timeline_button.accessibilityLabel = minimized ? @"Expand timeline" : @"Minimize timeline";
+  const GHOST_IOSInteractionContext &context = interaction_context;
+  const double scale = window->getWindowScaleFactor();
+  if (!context.has_timeline || scale <= 0.0) {
+    timeline_button.hidden = YES;
+    return;
+  }
+  const CGFloat size = 28.0f;
+  const CGFloat right = context.timeline_right / scale;
+  const CGFloat middle = (context.timeline_header_top + context.timeline_header_bottom) * 0.5 /
+                         scale;
+  timeline_button.frame = CGRectMake(right - size - 8.0f, middle - size * 0.5f, size, size);
+  timeline_button.hidden = NO;
+  [timeline_button.superview bringSubviewToFront:timeline_button];
+}
+
+- (void)applyTimeline
+{
+  char command[GHOST_IOS_COMMAND_MAX];
+  GHOST_IOSCommand_format(
+      command, "ios.timeline", "minimized", touch_settings.timeline_minimized ? "1" : "0");
+  [self queueCommand:command];
+}
+
+/* Minimized, the timeline is only its header and the 3D Viewport takes the room. */
+- (void)toggleTimeline
+{
+  touch_settings.timeline_minimized = !touch_settings.timeline_minimized;
+  GHOST_IOSTouchSettings_save(touch_settings);
+  GHOST_IOSStyle_selectionFeedback();
+  [self updateTimelineButton];
+  [self applyTimeline];
+}
+
+/* The divider above the quick bar moves with the timeline's bottom edge: dragging it resizes
+ * Blender's timeline, not only the quick bar. */
+- (void)quickBarDivider:(UIGestureRecognizerState)state dragUp:(CGFloat)points
+{
+  if (window == nullptr || !interaction_context.has_timeline) {
+    return;
+  }
+  const int header = std::max(
+      1, interaction_context.timeline_header_bottom - interaction_context.timeline_header_top);
+  if (state == UIGestureRecognizerStateBegan) {
+    timeline_drag_start = interaction_context.timeline_height;
+    timeline_drag_sent = timeline_drag_start;
+    return;
+  }
+  if (state != UIGestureRecognizerStateChanged && state != UIGestureRecognizerStateEnded) {
+    return;
+  }
+  const int height = GHOST_IOSDivider_timelineHeight(
+      timeline_drag_start, header + 1, points, window->getWindowScaleFactor());
+  if (height != timeline_drag_sent) {
+    timeline_drag_sent = height;
+    char value[16];
+    std::snprintf(value, sizeof(value), "%d", height);
+    char command[GHOST_IOS_COMMAND_MAX];
+    if (GHOST_IOSCommand_format(command, "ios.timeline", "height", value)) {
+      [self queueCommand:command];
+    }
+  }
+  if (state == UIGestureRecognizerStateEnded) {
+    /* Dragged down to its header, the timeline counts as minimized, and the reverse. */
+    const bool minimized = height <= header + 2;
+    if (touch_settings.timeline_minimized != minimized) {
+      touch_settings.timeline_minimized = minimized;
+      GHOST_IOSTouchSettings_save(touch_settings);
+      [self updateTimelineButton];
+    }
+  }
+}
+
+/** \} */
 
 - (void)commandBarAction:(GHOST_IOSBarAction)action
 {
@@ -1778,13 +1992,22 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
                     event_info.location.x,
                     event_info.location.y);
 
+      /* Trackpad events carry screen coordinates, like cursor events: Blender converts them back
+       * with screenToClient, which accounts for the canvas' inset. */
+      int32_t screen_x = 0;
+      int32_t screen_y = 0;
+      window->clientToScreen(int32_t(std::lround(event_info.location.x)),
+                             int32_t(std::lround(event_info.location.y)),
+                             screen_x,
+                             screen_y);
+
       switch (event_type) {
         case UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS:
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
                                                                   window,
                                                                   GHOST_kTrackpadEventScroll,
-                                                                  event_info.location.x,
-                                                                  event_info.location.y,
+                                                                  screen_x,
+                                                                  screen_y,
                                                                   event_info.translation.x,
                                                                   event_info.translation.y,
                                                                   true,
@@ -1794,8 +2017,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
                                                                   window,
                                                                   GHOST_kTrackpadEventScroll,
-                                                                  event_info.location.x,
-                                                                  event_info.location.y,
+                                                                  screen_x,
+                                                                  screen_y,
                                                                   event_info.translation.x,
                                                                   event_info.translation.y,
                                                                   true,
@@ -1806,8 +2029,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
                                                                   window,
                                                                   GHOST_kTrackpadEventScroll,
-                                                                  event_info.location.x,
-                                                                  event_info.location.y,
+                                                                  screen_x,
+                                                                  screen_y,
                                                                   event_info.translation.x,
                                                                   event_info.translation.y,
                                                                   true));
@@ -1816,8 +2039,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
           system->pushEvent(std::make_unique<GHOST_EventTrackpad>(system->getMilliSeconds(),
                                                                   window,
                                                                   GHOST_kTrackpadEventMagnify,
-                                                                  event_info.location.x,
-                                                                  event_info.location.y,
+                                                                  screen_x,
+                                                                  screen_y,
                                                                   event_info.distance,
                                                                   0,
                                                                   false,
@@ -1851,6 +2074,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     return NO;
   }
   if (GHOST_IOSResizeHandles_containsView(resize_handles, touch.view)) {
+    return NO;
+  }
+  if (timeline_button != nil && [touch.view isDescendantOfView:timeline_button]) {
     return NO;
   }
   return YES;
@@ -1898,7 +2124,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
           GHOST_IOSFileAccess_containsView(file_access_controls, touch.view) ||
           GHOST_IOSModifierBelt_containsView(modifier_belt, touch.view) ||
           GHOST_IOSPencilPalette_containsView(pencil_palette, touch.view) ||
-          GHOST_IOSResizeHandles_containsView(resize_handles, touch.view))
+          GHOST_IOSResizeHandles_containsView(resize_handles, touch.view) ||
+          (timeline_button != nil && [touch.view isDescendantOfView:timeline_button]))
       {
         continue;
       }
@@ -2859,6 +3086,10 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
         return GHOST_kFailure;
       }
       onscreen_keyboard_active = true;
+      if (virtual_pointer != nullptr) {
+        /* The drawn pointer would otherwise rest over the text being edited. */
+        virtual_pointer->setTextEditing(true);
+      }
       [self.rootViewController setNeedsUpdateOfPrefersPointerLocked];
       [self applyKeyboardSelection:keyboard_properties];
     }
@@ -2879,6 +3110,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
        (like generating events back to Blender)
        */
       onscreen_keyboard_active = false;
+      if (virtual_pointer != nullptr) {
+        virtual_pointer->setTextEditing(false);
+      }
 
       /* Shut down the keyboard. */
       [text_field resignFirstResponder];
@@ -2948,6 +3182,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   UIView *canvas_;
   CGFloat leading_inset_;
   CGFloat trailing_inset_;
+  CGFloat top_inset_;
+  CGFloat bottom_inset_;
 }
 - (instancetype)initWithCanvas:(UIView *)canvas;
 @end
@@ -2963,6 +3199,8 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   canvas_ = canvas;
   leading_inset_ = 0.0f;
   trailing_inset_ = 0.0f;
+  top_inset_ = 0.0f;
+  bottom_inset_ = 0.0f;
   /* Matches the area around Blender's editors, so the bar's column reads as part of the UI. */
   self.backgroundColor = [UIColor colorWithWhite:0.11f alpha:1.0f];
   self.accessibilityIdentifier = @"blender_canvas_container";
@@ -2981,14 +3219,43 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
   [self setNeedsLayout];
 }
 
+- (void)setCanvasInsetTop:(CGFloat)top
+{
+  if (top == top_inset_) {
+    return;
+  }
+  top_inset_ = top;
+  [self setNeedsLayout];
+}
+
+- (void)setCanvasInsetBottom:(CGFloat)bottom
+{
+  if (bottom == bottom_inset_) {
+    return;
+  }
+  bottom_inset_ = bottom;
+  [self setNeedsLayout];
+}
+
+- (void)safeAreaInsetsDidChange
+{
+  [super safeAreaInsetsDidChange];
+  [self setNeedsLayout];
+}
+
 - (void)layoutSubviews
 {
-  [super layoutSubviews];
   const CGRect bounds = self.bounds;
+  /* A header or dock also covers the status bar or home indicator area next to it. */
+  const CGFloat top = top_inset_ > 0.0f ? top_inset_ + self.safeAreaInsets.top : 0.0f;
+  const CGFloat bottom = bottom_inset_ > 0.0f ? bottom_inset_ + self.safeAreaInsets.bottom :
+                                                0.0f;
   const CGFloat width = std::max<CGFloat>(1.0f, bounds.size.width - leading_inset_ - trailing_inset_);
-  /* A new canvas size reaches Blender as a window resize, through the drawable size. */
-  canvas_.frame = CGRectMake(bounds.origin.x + leading_inset_, bounds.origin.y, width,
-                             bounds.size.height);
+  const CGFloat height = std::max<CGFloat>(1.0f, bounds.size.height - top - bottom);
+  /* A new canvas size reaches Blender as a window resize, through the drawable size. Set it
+   * before Auto Layout runs, so views anchored to the canvas follow it in the same pass. */
+  canvas_.frame = CGRectMake(bounds.origin.x + leading_inset_, bounds.origin.y + top, width, height);
+  [super layoutSubviews];
 }
 
 @end

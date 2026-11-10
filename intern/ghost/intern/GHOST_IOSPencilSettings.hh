@@ -82,6 +82,8 @@ struct GHOST_IOSTouchSettings {
   bool pencil_only_drawing = false;
   /** More room between Blender's buttons, rows and panels, and larger text. On for touch. */
   bool touch_spacing = true;
+  /** The timeline shows only its header row, giving the 3D Viewport the room. */
+  bool timeline_minimized = true;
   GHOST_IOSGestureAction tap_gestures[GHOST_IOS_TAP_GESTURE_COUNT] = {
       GHOST_IOSGestureAction::Undo,
       GHOST_IOSGestureAction::Redo,

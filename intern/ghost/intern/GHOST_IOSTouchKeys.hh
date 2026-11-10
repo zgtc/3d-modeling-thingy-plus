@@ -26,6 +26,13 @@ enum : uint8_t {
   GHOST_IOS_STROKE_OS = 1 << 3,
 };
 
+/* Running-tool keys from Blender carry their modifiers with the same bits. */
+static_assert(int(GHOST_IOS_STROKE_SHIFT) == int(GHOST_IOS_MODAL_KEY_SHIFT) &&
+                  int(GHOST_IOS_STROKE_CTRL) == int(GHOST_IOS_MODAL_KEY_CTRL) &&
+                  int(GHOST_IOS_STROKE_ALT) == int(GHOST_IOS_MODAL_KEY_ALT) &&
+                  int(GHOST_IOS_STROKE_OS) == int(GHOST_IOS_MODAL_KEY_OS),
+              "modifier bits must match");
+
 struct GHOST_IOSKeyStroke {
   GHOST_TKey key;
   /** #GHOST_IOS_STROKE_SHIFT and friends. */
@@ -247,40 +254,51 @@ struct GHOST_IOSBarKey {
 
 constexpr int GHOST_IOS_BAR_KEY_MAX = 6;
 
+/* In the order the agreed layout shows them on the quick bar. */
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_OBJECT[] = {
-    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
-    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
-    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r")},
-    {"S", GHOST_IOS_KEY_TEXT(GHOST_kKeyS, "s")},
-    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
     {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
+    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
+    {"S", GHOST_IOS_KEY_TEXT(GHOST_kKeyS, "s")},
+    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r")},
+    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
 };
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_EDIT[] = {
-    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
-    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
-    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r")},
-    {"S", GHOST_IOS_KEY_TEXT(GHOST_kKeyS, "s")},
+    {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
     {"E", GHOST_IOS_KEY_TEXT(GHOST_kKeyE, "e")},
     {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
+    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r")},
+    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
 };
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_SCULPT[] = {
+    {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
     {"F", GHOST_IOS_KEY_TEXT(GHOST_kKeyF, "f")},
     {"⇧F", GHOST_IOS_KEY_MOD(GHOST_kKeyF, GHOST_IOS_STROKE_SHIFT)},
     {"H", GHOST_IOS_KEY_TEXT(GHOST_kKeyH, "h")},
     {"⌥H", GHOST_IOS_KEY_MOD(GHOST_kKeyH, GHOST_IOS_STROKE_ALT)},
     {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
+};
+
+/* Paint modes: brush radius and strength, swap colours and stroke method in place of hide. */
+inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_PAINT[] = {
     {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
+    {"F", GHOST_IOS_KEY_TEXT(GHOST_kKeyF, "f")},
+    {"⇧F", GHOST_IOS_KEY_MOD(GHOST_kKeyF, GHOST_IOS_STROKE_SHIFT)},
+    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
+    {"E", GHOST_IOS_KEY_TEXT(GHOST_kKeyE, "e")},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
 };
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_NODE[] = {
-    {"Add", GHOST_IOS_KEY_MOD(GHOST_kKeyA, GHOST_IOS_STROKE_SHIFT)},
-    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
-    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
-    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
-    {"H", GHOST_IOS_KEY_TEXT(GHOST_kKeyH, "h")},
     {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
+    {"⇧A", GHOST_IOS_KEY_MOD(GHOST_kKeyA, GHOST_IOS_STROKE_SHIFT)},
+    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
+    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
+    {"H", GHOST_IOS_KEY_TEXT(GHOST_kKeyH, "h")},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
 };
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_OTHER[] = {
@@ -309,9 +327,11 @@ inline const GHOST_IOSBarKey *GHOST_IOSCommandBar_keys(const GHOST_IOSInteractio
         *r_count = GHOST_IOS_ARRAY_LEN(GHOST_IOS_BAR_EDIT);
         return GHOST_IOS_BAR_EDIT;
       case GHOST_IOSMode::Sculpt:
-      case GHOST_IOSMode::Paint:
         *r_count = GHOST_IOS_ARRAY_LEN(GHOST_IOS_BAR_SCULPT);
         return GHOST_IOS_BAR_SCULPT;
+      case GHOST_IOSMode::Paint:
+        *r_count = GHOST_IOS_ARRAY_LEN(GHOST_IOS_BAR_PAINT);
+        return GHOST_IOS_BAR_PAINT;
       case GHOST_IOSMode::Other:
         break;
     }

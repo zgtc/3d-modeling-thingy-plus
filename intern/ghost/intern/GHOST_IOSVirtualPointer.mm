@@ -305,6 +305,10 @@ class GHOST_IOSVirtualPointer::Impl {
     int32_t x = int32_t(std::lround(state_.x()));
     int32_t y = int32_t(std::lround(state_.y()));
     constrainCursorForEvent(x, y);
+    /* The pointer lives in canvas (client) coordinates, but Blender reads cursor events as screen
+     * coordinates and converts them back with screenToClient. Without this, an inset canvas
+     * offsets every tap from the drawn pointer by the canvas' position on screen. */
+    window_->clientToScreen(x, y, x, y);
     system_->pushEvent(std::make_unique<GHOST_EventCursor>(
         system_->getMilliSeconds(), GHOST_kEventCursorMove, window_, x, y, tablet));
     updateCursorLayer();
@@ -612,6 +616,12 @@ GHOST_TSuccess GHOST_IOSVirtualPointer::getCursorPosition(int32_t &screen_x,
 void GHOST_IOSVirtualPointer::setBlenderVisibility(const bool visible)
 {
   impl_->state_.setBlenderVisibility(visible);
+  impl_->updateCursorLayer();
+}
+
+void GHOST_IOSVirtualPointer::setTextEditing(const bool editing)
+{
+  impl_->state_.setTextEditing(editing);
   impl_->updateCursorLayer();
 }
 

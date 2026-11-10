@@ -219,9 +219,15 @@ class GHOST_IOSVirtualPointerState {
     blender_visible_ = visible;
   }
 
+  /** While a text field is edited the drawn pointer stays hidden, so it never covers the text. */
+  void setTextEditing(const bool editing)
+  {
+    text_editing_ = editing;
+  }
+
   bool visible() const
   {
-    return blender_visible_ && source_ != GHOST_IOSPointerSource::Pencil;
+    return blender_visible_ && !text_editing_ && source_ != GHOST_IOSPointerSource::Pencil;
   }
 
   double x() const
@@ -245,5 +251,6 @@ class GHOST_IOSVirtualPointerState {
   bool initialized_ = false;
   bool relative_active_ = false;
   bool blender_visible_ = true;
+  bool text_editing_ = false;
   GHOST_IOSPointerSource source_ = GHOST_IOSPointerSource::Finger;
 };

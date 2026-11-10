@@ -31,7 +31,7 @@ class SideloadIpaTests(unittest.TestCase):
                     "CFBundleIdentifier": "org.blenderfoundation.blender.ios",
                     "CFBundleName": "Blender",
                     "CFBundlePackageType": "APPL",
-                    "UIDeviceFamily": [1, 2],
+                    "UIDeviceFamily": [2],
                 },
                 handle,
             )

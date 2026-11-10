@@ -254,6 +254,12 @@ static os_log_t GHOST_IOSPencilPaletteLog()
                    completion:nil];
 }
 
+- (void)setCenterSymbol:(const char *)symbol
+{
+  ((UIImageView *)center_).image = GHOST_IOSStyle_symbol([NSString stringWithUTF8String:symbol],
+                                                         15.0f);
+}
+
 - (void)hide
 {
   if (self.hidden) {
@@ -346,7 +352,15 @@ static os_log_t GHOST_IOSPencilPaletteLog()
     edit_started_ = NO;
     return;
   }
-  const int index = [self slotAtPoint:[touches.anyObject locationInView:self]];
+  const CGPoint point = [touches.anyObject locationInView:self];
+  const int index = [self slotAtPoint:point];
+  if (index < 0 && hypot(point.x - center_point_.x, point.y - center_point_.y) < inner_radius &&
+      [delegate_ respondsToSelector:@selector(pencilPaletteSwitchPage)])
+  {
+    GHOST_IOSStyle_selectionFeedback();
+    [delegate_ pencilPaletteSwitchPage];
+    return;
+  }
   [self hide];
   if (index >= 0) {
     [delegate_ pencilPaletteChoseSlot:index];
@@ -687,6 +701,11 @@ void GHOST_IOSPencilPalette_show(NSObject *palette,
 void GHOST_IOSPencilPalette_hide(NSObject *palette)
 {
   [(GHOSTIOSPencilPaletteView *)palette hide];
+}
+
+void GHOST_IOSPencilPalette_setCenterSymbol(NSObject *palette, const char *symbol)
+{
+  [(GHOSTIOSPencilPaletteView *)palette setCenterSymbol:symbol];
 }
 
 bool GHOST_IOSPencilPalette_isVisible(NSObject *palette)

@@ -49,6 +49,7 @@
 #include "WM_types.hh"
 
 #include "wm.hh"
+#include "wm_splash_fit.hh"
 
 namespace blender {
 
@@ -287,35 +288,23 @@ static int is_using_macos_rosetta()
 }
 #endif /* __APPLE__ */
 
-static ui::Block *wm_block_splash_create(bContext *C, ARegion *region, void * /*arg*/)
+/** The splash image, version label and banner, \a x from the splash's left edge. */
+static void wm_block_splash_add_images(ui::Block *block,
+                                       ImBuf *ibuf,
+                                       const int x,
+                                       const int splash_width,
+                                       const int splash_height)
 {
-  const uiStyle *style = ui::style_get_dpi();
-
-  ui::Block *block = block_begin(C, region, "splash", ui::EmbossType::Emboss);
-
-  /* Note on #BLOCK_NO_WIN_CLIP, the window size is not always synchronized
-   * with the OS when the splash shows, window clipping in this case gives
-   * ugly results and clipping the splash isn't useful anyway, just disable it #32938. */
-  block_flag_enable(block, ui::BLOCK_LOOP | ui::BLOCK_KEEP_OPEN | ui::BLOCK_NO_WIN_CLIP);
-  block_theme_style_set(block, ui::BLOCK_THEME_STYLE_POPUP);
-
-  int splash_width = style->widget.points * 45 * UI_SCALE_FAC;
-  CLAMP_MAX(splash_width, WM_window_native_pixel_x(CTX_wm_window(C)) * 0.7f);
-  int splash_height;
-
-  /* Would be nice to support caching this, so it only has to be re-read (and likely resized) on
-   * first draw or if the image changed. */
-  ImBuf *ibuf = wm_block_splash_image(splash_width, &splash_height);
   /* This should never happen, if it does - don't crash. */
   if (LIKELY(ibuf)) {
     ui::Button *but = uiDefButImage(
-        block, ibuf, 0, 0.5f * U.widget_unit, splash_width, splash_height, nullptr);
+        block, ibuf, x, 0.5f * U.widget_unit, splash_width, splash_height, nullptr);
 
     button_func_set(but, [block](bContext &C) { wm_block_splash_close(&C, block); });
 
     wm_block_splash_add_label(block,
                               BKE_blender_version_string(),
-                              splash_width - 8.0 * UI_SCALE_FAC,
+                              x + splash_width - 8.0 * UI_SCALE_FAC,
                               splash_height - 13.0 * UI_SCALE_FAC);
   }
 
@@ -328,11 +317,18 @@ static ui::Block *wm_block_splash_create(bContext *C, ARegion *region, void * /*
       &banner_width, &banner_height, splash_width, splash_height);
   if (bannerbuf) {
     ui::Button *banner_but = uiDefButImage(
-        block, bannerbuf, 0, 0.5f * U.widget_unit, banner_width, banner_height, nullptr);
+        block, bannerbuf, x, 0.5f * U.widget_unit, banner_width, banner_height, nullptr);
 
     button_func_set(banner_but, [block](bContext &C) { wm_block_splash_close(&C, block); });
   }
+}
 
+/** The menu under the splash image: quick setup, or the file and link columns. */
+static void wm_block_splash_add_menu(bContext *C,
+                                     ui::Block *block,
+                                     const uiStyle *style,
+                                     const int splash_width)
+{
   const int layout_margin_x = UI_SCALE_FAC * 26;
   ui::Layout &layout = ui::block_layout(block,
                                         ui::LayoutDirection::Vertical,
@@ -400,6 +396,52 @@ static ui::Block *wm_block_splash_create(bContext *C, ARegion *region, void * /*
 
     layout.separator();
   }
+#endif
+}
+
+static ui::Block *wm_block_splash_create(bContext *C, ARegion *region, void * /*arg*/)
+{
+  const uiStyle *style = ui::style_get_dpi();
+
+  ui::Block *block = block_begin(C, region, "splash", ui::EmbossType::Emboss);
+
+  /* Note on #BLOCK_NO_WIN_CLIP, the window size is not always synchronized
+   * with the OS when the splash shows, window clipping in this case gives
+   * ugly results and clipping the splash isn't useful anyway, just disable it #32938. */
+  block_flag_enable(block, ui::BLOCK_LOOP | ui::BLOCK_KEEP_OPEN | ui::BLOCK_NO_WIN_CLIP);
+  block_theme_style_set(block, ui::BLOCK_THEME_STYLE_POPUP);
+
+  int splash_width = style->widget.points * 45 * UI_SCALE_FAC;
+  CLAMP_MAX(splash_width, WM_window_native_pixel_x(CTX_wm_window(C)) * 0.7f);
+  /* Would be nice to support caching this, so it only has to be re-read (and likely resized) on
+   * first draw or if the image changed. */
+  int splash_height = 0;
+  ImBuf *ibuf = wm_block_splash_image(splash_width, &splash_height);
+
+#ifdef BLENDER_PLATFORM_SPLASH_FIT
+  /* Native bars can leave a short window: lay out the menu first, then give the image only the
+   * height that is left, so neither runs off the top or bottom. */
+  wm_block_splash_add_menu(C, block, style, splash_width);
+  const int content_height = std::abs(ui::block_layout_resolve(block)[1]);
+  const WM_SplashImageFit fit = wm_splash_fit_image(splash_width,
+                                                    splash_width,
+                                                    splash_height,
+                                                    content_height,
+                                                    WM_window_native_pixel_y(CTX_wm_window(C)),
+                                                    int(0.5f * U.widget_unit));
+  if (ibuf && fit.height == 0) {
+    IMB_freeImBuf(ibuf);
+    ibuf = nullptr;
+  }
+  else if (ibuf && fit.height != splash_height) {
+    IMB_scale(ibuf, fit.width, fit.height, IMBScaleFilter::Box, false);
+  }
+  if (ibuf) {
+    wm_block_splash_add_images(block, ibuf, fit.x, fit.width, fit.height);
+  }
+#else
+  wm_block_splash_add_images(block, ibuf, 0, splash_width, splash_height);
+  wm_block_splash_add_menu(C, block, style, splash_width);
 #endif
 
   block_bounds_set_centered(block, 0);

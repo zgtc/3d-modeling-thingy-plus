@@ -388,3 +388,93 @@ class GhostVirtualPointerIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PointerScreenCoordinateTests(unittest.TestCase):
+    """Blender reads cursor and trackpad event positions as screen coordinates and converts them
+    with screenToClient. Once the canvas is inset for the rail, header and quick bar, pushing
+    canvas (client) positions offsets every tap up and left of the drawn pointer (device
+    feedback on #5)."""
+
+    def test_cursor_events_are_pushed_in_screen_coordinates(self) -> None:
+        source = POINTER_SOURCE.read_text()
+        send = source[source.index("  void sendCursorEvent(const GHOST_TabletData &tablet)") :]
+        send = send[: send.index("\n  }\n")]
+        self.assertIn("constrainCursorForEvent(x, y);", send)
+        self.assertIn("window_->clientToScreen(x, y, x, y);", send)
+        self.assertLess(send.index("constrainCursorForEvent(x, y);"),
+                        send.index("window_->clientToScreen(x, y, x, y);"))
+        self.assertLess(send.index("window_->clientToScreen(x, y, x, y);"),
+                        send.index("GHOST_kEventCursorMove"))
+
+    def test_trackpad_events_are_pushed_in_screen_coordinates(self) -> None:
+        source = WINDOW_SOURCE.read_text()
+        generate = source[source.index("- (void)generateUserInputEvents:(const UserInputEvent &)event_info\n{") :]
+        generate = generate[: generate.index("\n}\n")]
+        self.assertIn("window->clientToScreen(", generate)
+        self.assertNotIn("event_info.location.x,\n", generate.split("switch (event_type)")[1])
+        self.assertIn("screen_x,", generate)
+        self.assertIn("screen_y,", generate)
+
+    def test_cursor_position_round_trips_through_screen_coordinates(self) -> None:
+        source = POINTER_SOURCE.read_text()
+        get = source[source.index("GHOST_TSuccess GHOST_IOSVirtualPointer::getCursorPosition(") :]
+        get = get[: get.index("\n}\n")]
+        self.assertIn("clientToScreen", get)
+        system = SYSTEM_SOURCE.read_text()
+        warp = system[system.index("GHOST_TSuccess GHOST_SystemIOS::setCursorPosition(") :]
+        warp = warp[: warp.index("\n}\n")]
+        self.assertIn("screenToClient", warp)
+
+
+class PointerTextEditingTests(unittest.TestCase):
+    """Device feedback on #5, item 8: the drawn pointer must not rest over a text field while it
+    is being edited."""
+
+    def test_pointer_hides_while_text_is_edited(self) -> None:
+        harness = r'''
+            #include "GHOST_IOSVirtualPointerState.hh"
+            #include <cassert>
+            int main() {
+              GHOST_IOSVirtualPointerState state;
+              state.setSource(GHOST_IOSPointerSource::Finger);
+              assert(state.visible());
+              state.setTextEditing(true);
+              assert(!state.visible() && "no pointer over the text being edited");
+              /* Moving does not bring it back while editing. */
+              state.moveAbsolute(10.0, 10.0, GHOST_IOSPointerSource::Hardware);
+              assert(!state.visible());
+              state.setTextEditing(false);
+              assert(state.visible());
+              /* Blender's own hidden cursor still wins. */
+              state.setBlenderVisibility(false);
+              assert(!state.visible());
+              return 0;
+            }
+        '''
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "pointer_text_test.cc"
+            executable = Path(directory) / "pointer_text_test"
+            source.write_text(harness)
+            result = subprocess.run(
+                ["xcrun", "clang++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                 "-I", str(POINTER_STATE_HEADER.parent), str(source), "-o", str(executable)],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_window_tells_the_pointer_when_text_editing_starts_and_ends(self) -> None:
+        window = WINDOW_SOURCE.read_text()
+        popup = window[window.index("- (GHOST_TSuccess)popupOnscreenKeyboard:(const GHOST_KeyboardProperties &)keyboard_properties\n{") :]
+        popup = popup[: popup.index("\n}\n")]
+        self.assertIn("virtual_pointer->setTextEditing(true);", popup)
+        hide = window[window.index("- (GHOST_TSuccess)hideOnscreenKeyboard\n{") :]
+        hide = hide[: hide.index("\n}\n")]
+        self.assertIn("virtual_pointer->setTextEditing(false);", hide)
+        pointer = POINTER_SOURCE.read_text()
+        setter = pointer[pointer.index("void GHOST_IOSVirtualPointer::setTextEditing(") :]
+        setter = setter[: setter.index("\n}\n")]
+        self.assertIn("state_.setTextEditing(editing);", setter)
+        self.assertIn("updateCursorLayer();", setter)
+        self.assertIn("void setTextEditing(bool editing);", POINTER_HEADER.read_text())

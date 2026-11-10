@@ -245,7 +245,7 @@ class CustomActionTests(unittest.TestCase):
             CHECK(std::strcmp(bar.set, "object") == 0);
             CHECK(bar.count == 6);
             CHECK(std::strcmp(bar.keys[1].command, "wm.call_menu\\nname=VIEW3D_MT_add") == 0);
-            CHECK(bar.keys[0].command == nullptr && std::strcmp(bar.keys[0].title, "Tab") == 0);
+            CHECK(bar.keys[5].command == nullptr && std::strcmp(bar.keys[5].title, "Tab") == 0);
             /* Each editor keeps its own set. */
             bar.build(context(GHOST_IOSEditor::Node, GHOST_IOSMode::Other), file);
             CHECK(std::strcmp(bar.set, "node") == 0);
@@ -406,12 +406,12 @@ class PanelSourceTests(unittest.TestCase):
         spacing = self.shim[self.shim.index("static void wm_ios_set_touch_spacing(") :]
         spacing = spacing[: spacing.index("\n}\n")]
         self.assertIn("if (!spacing.saved)", spacing)
-        self.assertIn("enabled ? 2.0f : 1.0f", spacing)
-        self.assertIn("style->buttonspacey", spacing)
+        # The preset's sizes live in wm_ios_layout.hh (see test_wm_ios_layout).
+        self.assertIn("wm_ios_touch_spacing(spacing, enabled)", spacing)
+        self.assertIn("style->buttonspacey = touch.buttonspacey;", spacing)
         self.assertNotIn("U.ui_scale", spacing)
         # Larger text too, restored from the saved values when off.
-        self.assertIn("enabled ? 1.15f : 1.0f", spacing)
-        self.assertIn("style->widget.points = spacing.widget_points * text_factor;", spacing)
+        self.assertIn("style->widget.points = touch.widget_points;", spacing)
 
     def test_touch_spacing_is_on_by_default(self) -> None:
         run_harness(
@@ -456,10 +456,12 @@ class PanelSourceTests(unittest.TestCase):
                       should_receive)
 
     def test_command_bar_buttons_and_focus(self) -> None:
+        # The agreed quick bar has no Focus, Properties or Outliner buttons; they stay in the
+        # menu bar and the tap gestures.
         belt = BELT_SOURCE.read_text()
         for identifier in ("blender_command_bar_focus", "blender_command_bar_properties",
                            "blender_command_bar_outliner"):
-            self.assertIn(f'@"{identifier}"', belt)
+            self.assertNotIn(f'@"{identifier}"', belt)
         focus = self.window[self.window.index("- (void)toggleFocusMode") :]
         focus = focus[: focus.index("\n}\n")]
         self.assertIn('"screen.screen_full_area", "use_hide_panels", "1"', focus)

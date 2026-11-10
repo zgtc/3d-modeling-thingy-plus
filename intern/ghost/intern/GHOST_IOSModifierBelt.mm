@@ -4,13 +4,14 @@
 
 /** \file
  * \ingroup GHOST
- * Native on-screen command bar for touch and Apple Pencil.
+ * The iPad's left rail and quick bar, beside Blender's canvas.
  *
- * The bar stays open on the left or right screen edge, beside Blender's canvas, which is inset so
- * the bar never covers it. From the handle it shows Shift, Ctrl, Alt and Cmd, then up to six
- * shortcut keys for the editor and mode under the pointer, then a settings button. Drag the handle
- * to another corner, or tap it to switch sides. While a modal operator takes typed values, a key
- * pad with axes and numbers shows next to the bar, so `G Z 2 Enter` works without a keyboard.
+ * The rail runs down the left of the canvas with the tools of the current 3D Viewport mode,
+ * filling the height. The quick bar runs along the bottom: Shift, Ctrl, Alt and Cmd, the shortcut
+ * keys for the editor and mode under the pointer (or of the running tool), and the settings
+ * button. Dragging the divider above the quick bar sets its height.
+ * While a modal operator takes typed values, a key pad with axes and numbers shows above the quick
+ * bar, so `G Z 2 Enter` works without a keyboard. The canvas is inset so none of this covers it.
  *
  * Each modifier can be held like a hardware key, tapped to apply to the next click, or double
  * tapped to stay on. The key logic lives in #GHOST_IOSModifierLatch and the key sets in
@@ -23,35 +24,23 @@
 
 #include "GHOST_IOSModifierBelt.hh"
 #include "GHOST_IOSStyle.hh"
+#include "GHOST_IOSToolIcon.hh"
 
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
-/** Corners, stored in user defaults. */
-enum {
-  GHOST_IOS_BELT_TOP_LEFT = 0,
-  GHOST_IOS_BELT_TOP_RIGHT = 1,
-  GHOST_IOS_BELT_BOTTOM_LEFT = 2,
-  GHOST_IOS_BELT_BOTTOM_RIGHT = 3,
-};
-
-static NSString *const GHOST_IOSModifierBeltCorner = @"GHOST_IOSModifierBeltCorner";
+static NSString *const GHOST_IOSQuickBarHeightKey = @"GHOST_IOSQuickBarHeight";
 
 static constexpr CGFloat belt_padding = 4.0f;
 static constexpr CGFloat handle_size = GHOST_IOS_CONTROL_SIZE;
 static constexpr CGFloat key_width = 58.0f;
-/** The bar is vertical: one key wide. */
-static constexpr CGFloat belt_width = key_width + belt_padding * 2.0f;
-static constexpr CGFloat command_key_height = 36.0f;
+static constexpr CGFloat command_key_width = 44.0f;
+static constexpr CGFloat command_key_height = 40.0f;
+static constexpr CGFloat tool_size = GHOST_IOS_CONTROL_SIZE;
 static constexpr CGFloat pad_key_width = 52.0f;
 static constexpr CGFloat pad_key_height = 40.0f;
 static constexpr CGFloat pad_gap = 8.0f;
-static constexpr CGFloat edge_inset = 12.0f;
-/** Keep the bottom corners clear of Blender's status bar. */
-static constexpr CGFloat bottom_inset = 40.0f;
-/** Opacity while the app's finger cursor is over the belt. */
-static constexpr CGFloat cursor_over_alpha = 0.3f;
 
 struct GHOST_IOSModifierKeyInfo {
   GHOST_IOSModifier modifier;
@@ -374,47 +363,95 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Belt
+/** \name Rail and quick bar
  * \{ */
 
-@interface GHOSTIOSModifierBeltView : UIView {
+/** A rounded panel with the shared Liquid Glass or blur material behind its content. */
+static UIView *GHOST_IOSBelt_panel(NSString *identifier, const CGFloat radius)
+{
+  UIView *panel = [[[UIView alloc] init] autorelease];
+  panel.translatesAutoresizingMaskIntoConstraints = NO;
+  panel.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+  panel.accessibilityIdentifier = identifier;
+  if (!GHOST_IOSStyle_hasGlass()) {
+    /* Liquid Glass draws its own depth; the blur fallback needs a shadow to lift it. */
+    panel.layer.shadowColor = UIColor.blackColor.CGColor;
+    panel.layer.shadowOpacity = 0.3f;
+    panel.layer.shadowRadius = 8.0f;
+    panel.layer.shadowOffset = CGSizeMake(0.0f, 2.0f);
+  }
+  UIVisualEffectView *background = GHOST_IOSStyle_createMaterialView(radius);
+  [panel addSubview:background];
+  [NSLayoutConstraint activateConstraints:@[
+    [background.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor],
+    [background.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor],
+    [background.topAnchor constraintEqualToAnchor:panel.topAnchor],
+    [background.bottomAnchor constraintEqualToAnchor:panel.bottomAnchor],
+  ]];
+  return panel;
+}
+
+static NSArray<GHOSTIOSModifierKeyView *> *GHOST_IOSBelt_modifierKeys(
+    id<GHOSTIOSModifierBeltDelegate> delegate, NSString *suffix)
+{
+  NSMutableArray<GHOSTIOSModifierKeyView *> *keys = [NSMutableArray array];
+  for (const GHOST_IOSModifierKeyInfo &info : GHOST_IOS_MODIFIER_KEYS) {
+    GHOSTIOSModifierKeyView *key = [[[GHOSTIOSModifierKeyView alloc] initWithKey:info
+                                                                         delegate:delegate]
+        autorelease];
+    key.accessibilityIdentifier = [info.identifier stringByAppendingString:suffix];
+    [keys addObject:key];
+  }
+  return keys;
+}
+
+@interface GHOSTIOSModifierBeltView : NSObject {
   id<GHOSTIOSModifierBeltDelegate> delegate_;
-  UIVisualEffectView *background_;
-  UIStackView *stack_;
-  UIView *handle_;
-  UIImageView *handle_icon_;
-  NSArray<GHOSTIOSModifierKeyView *> *keys_;
+  /** Blender's canvas, and the view that holds the bars beside it. Not retained. */
+  UIView *input_view_;
+  UIView *host_;
+
+  /* Rail: tools over modifiers. */
+  UIView *tool_panel_;
+  UIScrollView *tool_scroll_view_;
+  UIStackView *tool_stack_;
+  NSMutableArray<UIButton *> *tool_buttons_;
+  const GHOST_IOSToolItem *tools_;
+  int tools_count_;
+
+  /* Quick bar: modifiers, shortcut keys, settings. */
+  UIView *quick_bar_;
+  UIStackView *quick_stack_;
+  NSArray<GHOSTIOSModifierKeyView *> *quick_modifier_keys_;
+  UIView *quick_rule_;
   NSMutableArray<GHOSTIOSCommandKeyButton *> *context_keys_;
   GHOST_IOSBarKey context_key_info_[GHOST_IOS_BAR_KEY_MAX];
   /* The bar's own copies, so keys stay valid when the caller reuses its buffers. */
   char context_key_titles_[GHOST_IOS_BAR_KEY_MAX][32];
   char context_key_commands_[GHOST_IOS_BAR_KEY_MAX][GHOST_IOS_COMMAND_MAX];
   int context_key_count_;
-  UIView *separator_;
-  NSArray<UIButton *> *action_buttons_;
+  UIView *spacer_;
   UIButton *settings_button_;
-  /** Sibling of the bar in the input view, so it can sit beside the bar. */
+  UIView *divider_;
+  UIPanGestureRecognizer *divider_pan_;
+  NSLayoutConstraint *quick_bar_height_;
+  CGFloat divider_drag_start_;
+  BOOL quick_bar_hidden_;
+
+  /* Key pad, in the canvas above the quick bar. */
   UIView *key_pad_;
   NSMutableArray<GHOSTIOSCommandKeyButton *> *key_pad_keys_;
   BOOL key_pad_wanted_;
-  NSArray<NSLayoutConstraint *> *corner_constraints_;
-  UIPanGestureRecognizer *pan_;
-  UITapGestureRecognizer *tap_;
-  /** Blender's canvas. Not retained. */
-  UIView *input_view_;
+
   id keyboard_connect_observer_;
   id keyboard_disconnect_observer_;
-  NSInteger corner_;
-  GHOST_IOSModifierMode modes_[GHOST_IOS_MODIFIER_COUNT];
-  BOOL expanded_;
-  BOOL cursor_over_;
 }
 - (instancetype)initWithInputView:(UIView *)input_view
                          delegate:(id<GHOSTIOSModifierBeltDelegate>)delegate;
 - (void)teardown;
 - (void)setModes:(const GHOST_IOSModifierMode *)modes;
-- (void)setCursor:(CGPoint)point visible:(bool)visible;
 - (void)setContextKeys:(const GHOST_IOSBarKey *)keys count:(int)count;
+- (void)setTools:(const GHOST_IOSToolItem *)tools count:(int)count active:(int)active;
 - (void)setKeyPadVisible:(BOOL)visible;
 - (void)setSettingsMenu:(UIMenu *)menu;
 - (BOOL)containsView:(UIView *)view;
@@ -425,156 +462,139 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
 - (instancetype)initWithInputView:(UIView *)input_view
                          delegate:(id<GHOSTIOSModifierBeltDelegate>)delegate
 {
-  self = [super initWithFrame:CGRectZero];
+  self = [super init];
   if (self == nil) {
     return nil;
   }
   delegate_ = delegate;
   input_view_ = input_view;
-  /* Pinned open: a tucked-away bar was hard to find and slow to reach. */
-  expanded_ = YES;
-  cursor_over_ = NO;
+  host_ = [input_view.superview conformsToProtocol:@protocol(GHOSTIOSCanvasInsetting)] ?
+              input_view.superview :
+              input_view;
+  tools_ = nullptr;
+  tools_count_ = 0;
   context_key_count_ = 0;
   key_pad_wanted_ = NO;
+  quick_bar_hidden_ = NO;
+  tool_buttons_ = [[NSMutableArray alloc] init];
   context_keys_ = [[NSMutableArray alloc] init];
   key_pad_keys_ = [[NSMutableArray alloc] init];
-  for (GHOST_IOSModifierMode &mode : modes_) {
-    mode = GHOST_IOSModifierMode::Off;
-  }
-  corner_constraints_ = nil;
+  UILayoutGuide *safe = host_.safeAreaLayoutGuide;
 
-  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-  corner_ = [defaults objectForKey:GHOST_IOSModifierBeltCorner] != nil ?
-                [defaults integerForKey:GHOST_IOSModifierBeltCorner] :
-                GHOST_IOS_BELT_BOTTOM_RIGHT;
-  corner_ = MAX(GHOST_IOS_BELT_TOP_LEFT, MIN(GHOST_IOS_BELT_BOTTOM_RIGHT, corner_));
+  /* Rail, top panel: the tools, scrolling when the mode has more than fit. */
+  tool_panel_ = [GHOST_IOSBelt_panel(@"blender_rail_tools", GHOST_IOS_RAIL_WIDTH * 0.5) retain];
+  tool_scroll_view_ = [[UIScrollView alloc] init];
+  tool_scroll_view_.translatesAutoresizingMaskIntoConstraints = NO;
+  tool_scroll_view_.showsVerticalScrollIndicator = NO;
+  tool_stack_ = [[UIStackView alloc] init];
+  tool_stack_.translatesAutoresizingMaskIntoConstraints = NO;
+  tool_stack_.axis = UILayoutConstraintAxisVertical;
+  tool_stack_.alignment = UIStackViewAlignmentCenter;
+  tool_stack_.spacing = 6.0f;
+  [tool_scroll_view_ addSubview:tool_stack_];
+  [tool_panel_ addSubview:tool_scroll_view_];
+  [host_ addSubview:tool_panel_];
 
-  self.translatesAutoresizingMaskIntoConstraints = NO;
-  self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
-  self.accessibilityIdentifier = @"blender_modifier_belt";
-  if (!GHOST_IOSStyle_hasGlass()) {
-    /* Liquid Glass draws its own depth; the blur fallback needs a shadow to lift it. */
-    self.layer.shadowColor = UIColor.blackColor.CGColor;
-    self.layer.shadowOpacity = 0.3f;
-    self.layer.shadowRadius = 8.0f;
-    self.layer.shadowOffset = CGSizeMake(0.0f, 2.0f);
-  }
-
-  background_ = GHOST_IOSStyle_createMaterialView(belt_width * 0.5f);
-  [self addSubview:background_];
-
-  handle_ = [[UIView alloc] init];
-  handle_.translatesAutoresizingMaskIntoConstraints = NO;
-  handle_.layer.cornerRadius = handle_size * 0.5f;
-  handle_.layer.cornerCurve = kCACornerCurveContinuous;
-  handle_.isAccessibilityElement = YES;
-  handle_.accessibilityTraits = UIAccessibilityTraitButton;
-  handle_.accessibilityLabel = @"Modifier keys";
-  handle_.accessibilityHint = @"Tap to switch sides. Drag to move to another corner.";
-  handle_.accessibilityIdentifier = @"blender_modifier_belt_handle";
-  handle_icon_ = [[UIImageView alloc] init];
-  handle_icon_.translatesAutoresizingMaskIntoConstraints = NO;
-  handle_icon_.contentMode = UIViewContentModeCenter;
-  handle_icon_.tintColor = UIColor.whiteColor;
-  [handle_ addSubview:handle_icon_];
-
-  NSMutableArray<GHOSTIOSModifierKeyView *> *keys = [NSMutableArray array];
-  for (const GHOST_IOSModifierKeyInfo &info : GHOST_IOS_MODIFIER_KEYS) {
-    GHOSTIOSModifierKeyView *key = [[[GHOSTIOSModifierKeyView alloc] initWithKey:info
-                                                                         delegate:delegate]
-        autorelease];
-    key.hidden = !expanded_;
-    [keys addObject:key];
-  }
-  keys_ = [keys copy];
-
-  separator_ = [[UIView alloc] init];
-  separator_.translatesAutoresizingMaskIntoConstraints = NO;
-  separator_.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.25f];
-  separator_.hidden = !expanded_;
-
-  struct ActionInfo {
-    GHOST_IOSBarAction action;
-    NSString *symbol;
-    NSString *title;
-    NSString *identifier;
-  };
-  static const ActionInfo action_infos[] = {
-      {GHOST_IOSBarAction::Focus, @"arrow.up.left.and.arrow.down.right", @"Focus mode",
-       @"blender_command_bar_focus"},
-      {GHOST_IOSBarAction::Properties, @"slider.horizontal.3", @"Properties",
-       @"blender_command_bar_properties"},
-      {GHOST_IOSBarAction::Outliner, @"list.bullet.indent", @"Outliner",
-       @"blender_command_bar_outliner"},
-  };
-  NSMutableArray<UIButton *> *action_buttons = [NSMutableArray array];
-  for (const ActionInfo &info : action_infos) {
-    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-    button.translatesAutoresizingMaskIntoConstraints = NO;
-    [button setImage:GHOST_IOSModifierSymbol(info.symbol, 16.0f) forState:UIControlStateNormal];
-    button.tintColor = UIColor.whiteColor;
-    button.tag = NSInteger(info.action);
-    button.accessibilityLabel = info.title;
-    button.accessibilityIdentifier = info.identifier;
-    button.hidden = YES;
-    [button addTarget:self
-                  action:@selector(handleActionButton:)
-        forControlEvents:UIControlEventTouchUpInside];
-    [NSLayoutConstraint activateConstraints:@[
-      [button.widthAnchor constraintEqualToConstant:key_width],
-      [button.heightAnchor constraintEqualToConstant:command_key_height],
-    ]];
-    [action_buttons addObject:button];
-  }
-  action_buttons_ = [action_buttons copy];
-
+  /* Quick bar along the bottom. */
+  quick_bar_ = [GHOST_IOSBelt_panel(@"blender_quick_bar", 14.0) retain];
+  quick_modifier_keys_ = [GHOST_IOSBelt_modifierKeys(delegate, @"") retain];
+  quick_rule_ = [[UIView alloc] init];
+  quick_rule_.translatesAutoresizingMaskIntoConstraints = NO;
+  quick_rule_.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.25f];
+  spacer_ = [[UIView alloc] init];
+  spacer_.translatesAutoresizingMaskIntoConstraints = NO;
+  [spacer_ setContentHuggingPriority:UILayoutPriorityDefaultLow - 1
+                             forAxis:UILayoutConstraintAxisHorizontal];
   settings_button_ = [[UIButton buttonWithType:UIButtonTypeSystem] retain];
   settings_button_.translatesAutoresizingMaskIntoConstraints = NO;
-  [settings_button_ setImage:GHOST_IOSModifierSymbol(@"gearshape", 17.0f)
+  [settings_button_ setImage:GHOST_IOSModifierSymbol(@"gearshape", 18.0f)
                     forState:UIControlStateNormal];
   settings_button_.tintColor = UIColor.whiteColor;
   settings_button_.showsMenuAsPrimaryAction = YES;
   settings_button_.accessibilityLabel = @"Touch and Pencil settings";
   settings_button_.accessibilityIdentifier = @"blender_command_bar_settings";
-  settings_button_.hidden = !expanded_;
+  quick_stack_ = [[UIStackView alloc] init];
+  quick_stack_.translatesAutoresizingMaskIntoConstraints = NO;
+  quick_stack_.axis = UILayoutConstraintAxisHorizontal;
+  quick_stack_.alignment = UIStackViewAlignmentCenter;
+  quick_stack_.spacing = 6.0f;
+  [quick_bar_ addSubview:quick_stack_];
+  [host_ addSubview:quick_bar_];
 
-  stack_ = [[UIStackView alloc] init];
-  stack_.translatesAutoresizingMaskIntoConstraints = NO;
-  stack_.axis = UILayoutConstraintAxisVertical;
-  stack_.alignment = UIStackViewAlignmentCenter;
-  stack_.spacing = belt_padding;
-  [self addSubview:stack_];
+  /* Divider above the quick bar: drag it to give the quick bar or Blender more height. */
+  divider_ = [[UIView alloc] init];
+  divider_.translatesAutoresizingMaskIntoConstraints = NO;
+  divider_.isAccessibilityElement = YES;
+  divider_.accessibilityLabel = @"Resize quick bar";
+  divider_.accessibilityIdentifier = @"blender_quick_bar_divider";
+  UIView *pill = [[[UIView alloc] init] autorelease];
+  pill.translatesAutoresizingMaskIntoConstraints = NO;
+  pill.userInteractionEnabled = NO;
+  pill.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.7f];
+  pill.layer.cornerRadius = 2.5f;
+  [divider_ addSubview:pill];
+  divider_pan_ = [[UIPanGestureRecognizer alloc] initWithTarget:self
+                                                         action:@selector(handleDivider:)];
+  [divider_ addGestureRecognizer:divider_pan_];
+  [host_ addSubview:divider_];
 
+  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+  const CGFloat stored = [defaults objectForKey:GHOST_IOSQuickBarHeightKey] != nil ?
+                             CGFloat([defaults doubleForKey:GHOST_IOSQuickBarHeightKey]) :
+                             CGFloat(GHOST_IOS_QUICK_BAR_DEFAULT_HEIGHT);
+  quick_bar_height_ = [[quick_bar_.heightAnchor
+      constraintEqualToConstant:GHOST_IOSQuickBar_clampHeight(stored)] retain];
+
+  const CGFloat margin = GHOST_IOS_RAIL_MARGIN;
   [NSLayoutConstraint activateConstraints:@[
-    [background_.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-    [background_.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-    [background_.topAnchor constraintEqualToAnchor:self.topAnchor],
-    [background_.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-    [stack_.topAnchor constraintEqualToAnchor:self.topAnchor constant:belt_padding],
-    [stack_.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-belt_padding],
-    [stack_.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-    [self.widthAnchor constraintEqualToConstant:belt_width],
-    [separator_.widthAnchor constraintEqualToConstant:28.0f],
-    [separator_.heightAnchor constraintEqualToConstant:1.0f],
-    [settings_button_.widthAnchor constraintEqualToConstant:key_width],
-    [settings_button_.heightAnchor constraintEqualToConstant:command_key_height],
-    [handle_.widthAnchor constraintEqualToConstant:handle_size],
-    [handle_.heightAnchor constraintEqualToConstant:handle_size],
-    [handle_icon_.centerXAnchor constraintEqualToAnchor:handle_.centerXAnchor],
-    [handle_icon_.centerYAnchor constraintEqualToAnchor:handle_.centerYAnchor],
+    /* The rail stands beside the canvas, level with it. */
+    [tool_panel_.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:margin],
+    [tool_panel_.widthAnchor constraintEqualToConstant:GHOST_IOS_RAIL_WIDTH],
+    [tool_panel_.topAnchor constraintEqualToAnchor:input_view.topAnchor constant:margin],
+    /* Shift, Ctrl, Alt and Cmd are on the quick bar only, so the tools get the full height. */
+    [tool_panel_.bottomAnchor constraintEqualToAnchor:input_view.bottomAnchor constant:-margin],
+    [tool_scroll_view_.leadingAnchor constraintEqualToAnchor:tool_panel_.leadingAnchor],
+    [tool_scroll_view_.trailingAnchor constraintEqualToAnchor:tool_panel_.trailingAnchor],
+    [tool_scroll_view_.topAnchor constraintEqualToAnchor:tool_panel_.topAnchor constant:10.0f],
+    [tool_scroll_view_.bottomAnchor constraintEqualToAnchor:tool_panel_.bottomAnchor
+                                                   constant:-10.0f],
+    [tool_stack_.topAnchor constraintEqualToAnchor:tool_scroll_view_.contentLayoutGuide.topAnchor],
+    [tool_stack_.bottomAnchor
+        constraintEqualToAnchor:tool_scroll_view_.contentLayoutGuide.bottomAnchor],
+    [tool_stack_.leadingAnchor
+        constraintEqualToAnchor:tool_scroll_view_.contentLayoutGuide.leadingAnchor],
+    [tool_stack_.trailingAnchor
+        constraintEqualToAnchor:tool_scroll_view_.contentLayoutGuide.trailingAnchor],
+    [tool_stack_.widthAnchor constraintEqualToAnchor:tool_scroll_view_.frameLayoutGuide.widthAnchor],
+
+    /* The quick bar spans the bottom, above the home indicator. */
+    [quick_bar_.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:margin],
+    [quick_bar_.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-margin],
+    [quick_bar_.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor
+                                            constant:-GHOST_IOS_QUICK_BAR_GAP],
+    quick_bar_height_,
+    [quick_stack_.leadingAnchor constraintEqualToAnchor:quick_bar_.leadingAnchor constant:10.0f],
+    [quick_stack_.trailingAnchor constraintEqualToAnchor:quick_bar_.trailingAnchor
+                                                constant:-10.0f],
+    [quick_stack_.centerYAnchor constraintEqualToAnchor:quick_bar_.centerYAnchor],
+    [quick_rule_.widthAnchor constraintEqualToConstant:1.0f],
+    [quick_rule_.heightAnchor constraintEqualToConstant:28.0f],
+    [settings_button_.widthAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
+    [settings_button_.heightAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
+
+    [divider_.leadingAnchor constraintEqualToAnchor:quick_bar_.leadingAnchor],
+    [divider_.trailingAnchor constraintEqualToAnchor:quick_bar_.trailingAnchor],
+    [divider_.bottomAnchor constraintEqualToAnchor:quick_bar_.topAnchor],
+    [divider_.heightAnchor constraintEqualToConstant:GHOST_IOS_QUICK_BAR_DIVIDER],
+    [pill.centerXAnchor constraintEqualToAnchor:divider_.centerXAnchor],
+    [pill.centerYAnchor constraintEqualToAnchor:divider_.centerYAnchor],
+    [pill.widthAnchor constraintEqualToConstant:44.0f],
+    [pill.heightAnchor constraintEqualToConstant:5.0f],
   ]];
 
-  tap_ = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
-  pan_ = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
-  pan_.maximumNumberOfTouches = 1;
-  [handle_ addGestureRecognizer:tap_];
-  [handle_ addGestureRecognizer:pan_];
-
-  [[self hostView] addSubview:self];
+  [self arrangeQuickBar];
   [self createKeyPadInView:input_view];
-  [self arrangeForCorner];
-  [self activateCornerConstraints];
-  [self updateHandle];
+  [self updateCanvasInsets];
 
   NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
   GHOSTIOSModifierBeltView *belt = self;
@@ -606,138 +626,107 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
     [keyboard_disconnect_observer_ release];
     keyboard_disconnect_observer_ = nil;
   }
-  [handle_ removeGestureRecognizer:tap_];
-  [handle_ removeGestureRecognizer:pan_];
-  if (id<GHOSTIOSCanvasInsetting> host = [self insettingHost]) {
-    [host setCanvasInsetsLeading:0.0f trailing:0.0f];
-  }
+  [divider_ removeGestureRecognizer:divider_pan_];
   for (GHOSTIOSCommandKeyButton *key in context_keys_) {
     [key forgetDelegate];
   }
   for (GHOSTIOSCommandKeyButton *key in key_pad_keys_) {
     [key forgetDelegate];
   }
+  for (UIButton *button in tool_buttons_) {
+    [button removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
+  }
+  for (GHOSTIOSModifierKeyView *key in quick_modifier_keys_) {
+    [key cancelTracking];
+  }
+  if ([host_ conformsToProtocol:@protocol(GHOSTIOSCanvasInsetting)]) {
+    id<GHOSTIOSCanvasInsetting> host = (id<GHOSTIOSCanvasInsetting>)host_;
+    [host setCanvasInsetsLeading:0.0f trailing:0.0f];
+    [host setCanvasInsetBottom:0.0f];
+  }
   delegate_ = nil;
+  [tool_panel_ removeFromSuperview];
+  [quick_bar_ removeFromSuperview];
+  [divider_ removeFromSuperview];
   [key_pad_ removeFromSuperview];
-  [self removeFromSuperview];
 }
 
 - (void)dealloc
 {
-  [background_ release];
-  [stack_ release];
-  [handle_ release];
-  [handle_icon_ release];
-  [keys_ release];
+  [tool_panel_ release];
+  [tool_scroll_view_ release];
+  [tool_stack_ release];
+  [tool_buttons_ release];
+  [quick_bar_ release];
+  [quick_stack_ release];
+  [quick_modifier_keys_ release];
+  [quick_rule_ release];
   [context_keys_ release];
-  [separator_ release];
-  [action_buttons_ release];
+  [spacer_ release];
   [settings_button_ release];
+  [divider_ release];
+  [divider_pan_ release];
+  [quick_bar_height_ release];
   [key_pad_ release];
   [key_pad_keys_ release];
-  [corner_constraints_ release];
-  [pan_ release];
-  [tap_ release];
   [super dealloc];
-}
-
-/** The canvas' superview when it can make room for the bar. */
-- (id<GHOSTIOSCanvasInsetting>)insettingHost
-{
-  UIView *host = input_view_.superview;
-  if ([host conformsToProtocol:@protocol(GHOSTIOSCanvasInsetting)]) {
-    return (id<GHOSTIOSCanvasInsetting>)host;
-  }
-  return nil;
-}
-
-- (UIView *)hostView
-{
-  return [self insettingHost] != nil ? input_view_.superview : input_view_;
 }
 
 - (void)updateCanvasInsets
 {
-  id<GHOSTIOSCanvasInsetting> host = [self insettingHost];
-  if (host == nil) {
+  if (![host_ conformsToProtocol:@protocol(GHOSTIOSCanvasInsetting)]) {
     return;
   }
-  double leading = 0.0, trailing = 0.0;
-  GHOST_IOSCommandBar_canvasInsets(
-      !self.hidden, [self isLeftCorner], belt_width, edge_inset, &leading, &trailing);
-  [host setCanvasInsetsLeading:leading trailing:trailing];
+  double leading = 0.0, bottom = 0.0;
+  GHOST_IOSRail_canvasInsets(!quick_bar_hidden_, quick_bar_height_.constant, &leading, &bottom);
+  id<GHOSTIOSCanvasInsetting> host = (id<GHOSTIOSCanvasInsetting>)host_;
+  [host setCanvasInsetsLeading:leading trailing:0.0f];
+  [host setCanvasInsetBottom:bottom];
 }
 
-- (BOOL)isLeftCorner
+/** Modifiers, then the shortcut keys, then the settings button at the far end. */
+- (void)arrangeQuickBar
 {
-  return corner_ == GHOST_IOS_BELT_TOP_LEFT || corner_ == GHOST_IOS_BELT_BOTTOM_LEFT;
-}
-
-- (BOOL)isTopCorner
-{
-  return corner_ == GHOST_IOS_BELT_TOP_LEFT || corner_ == GHOST_IOS_BELT_TOP_RIGHT;
-}
-
-/** Everything the handle shows and hides. */
-- (NSArray<UIView *> *)expandableViews
-{
-  NSMutableArray<UIView *> *views = [NSMutableArray arrayWithArray:keys_];
-  [views addObject:separator_];
-  [views addObjectsFromArray:context_keys_];
-  [views addObjectsFromArray:action_buttons_];
-  [views addObject:settings_button_];
-  return views;
-}
-
-/** Keep the handle in the corner so the keys open towards the middle of the edge. */
-- (void)arrangeForCorner
-{
-  for (UIView *view in [[stack_.arrangedSubviews copy] autorelease]) {
-    [stack_ removeArrangedSubview:view];
+  for (UIView *view in [[quick_stack_.arrangedSubviews copy] autorelease]) {
+    [quick_stack_ removeArrangedSubview:view];
     [view removeFromSuperview];
   }
-  NSMutableArray<UIView *> *order = [NSMutableArray arrayWithObject:handle_];
-  [order addObjectsFromArray:[self expandableViews]];
-  NSEnumerator<UIView *> *views = [self isTopCorner] ? order.objectEnumerator :
-                                                       order.reverseObjectEnumerator;
-  for (UIView *view in views) {
-    [stack_ addArrangedSubview:view];
+  for (GHOSTIOSModifierKeyView *key in quick_modifier_keys_) {
+    [quick_stack_ addArrangedSubview:key];
   }
+  [quick_stack_ addArrangedSubview:quick_rule_];
+  for (GHOSTIOSCommandKeyButton *key in context_keys_) {
+    [quick_stack_ addArrangedSubview:key];
+  }
+  [quick_stack_ addArrangedSubview:spacer_];
+  [quick_stack_ addArrangedSubview:settings_button_];
 }
 
-- (void)activateCornerConstraints
+- (void)handleDivider:(UIPanGestureRecognizer *)sender
 {
-  UIView *parent = self.superview;
-  if (parent == nil) {
-    return;
+  const CGFloat dy = [sender translationInView:host_].y;
+  /* Blender's timeline follows the divider, see #GHOST_IOSDivider_timelineHeight. */
+  [delegate_ quickBarDivider:sender.state dragUp:-dy];
+  switch (sender.state) {
+    case UIGestureRecognizerStateBegan:
+      divider_drag_start_ = quick_bar_height_.constant;
+      GHOST_IOSStyle_selectionFeedback();
+      break;
+    case UIGestureRecognizerStateChanged:
+      /* Dragging up gives the quick bar more height and Blender less. */
+      quick_bar_height_.constant = GHOST_IOSQuickBar_clampHeight(divider_drag_start_ - dy);
+      [self updateCanvasInsets];
+      break;
+    case UIGestureRecognizerStateEnded:
+    case UIGestureRecognizerStateCancelled:
+      quick_bar_height_.constant = GHOST_IOSQuickBar_clampHeight(divider_drag_start_ - dy);
+      [self updateCanvasInsets];
+      [NSUserDefaults.standardUserDefaults setDouble:quick_bar_height_.constant
+                                              forKey:GHOST_IOSQuickBarHeightKey];
+      break;
+    default:
+      break;
   }
-  if (corner_constraints_ != nil) {
-    [NSLayoutConstraint deactivateConstraints:corner_constraints_];
-    [corner_constraints_ release];
-  }
-  UILayoutGuide *safe_area = parent.safeAreaLayoutGuide;
-  NSLayoutConstraint *horizontal =
-      [self isLeftCorner] ?
-          [self.leadingAnchor constraintEqualToAnchor:safe_area.leadingAnchor
-                                             constant:edge_inset] :
-          [self.trailingAnchor constraintEqualToAnchor:safe_area.trailingAnchor
-                                              constant:-edge_inset];
-  NSLayoutConstraint *vertical =
-      [self isTopCorner] ?
-          [self.topAnchor constraintEqualToAnchor:safe_area.topAnchor constant:edge_inset] :
-          [self.bottomAnchor constraintEqualToAnchor:safe_area.bottomAnchor
-                                            constant:-bottom_inset];
-  /* The key pad opens towards the middle of the screen, level with the bar's handle end. */
-  NSLayoutConstraint *pad_horizontal =
-      [self isLeftCorner] ?
-          [key_pad_.leadingAnchor constraintEqualToAnchor:self.trailingAnchor constant:pad_gap] :
-          [key_pad_.trailingAnchor constraintEqualToAnchor:self.leadingAnchor constant:-pad_gap];
-  NSLayoutConstraint *pad_vertical =
-      [self isTopCorner] ? [key_pad_.topAnchor constraintEqualToAnchor:self.topAnchor] :
-                           [key_pad_.bottomAnchor constraintEqualToAnchor:self.bottomAnchor];
-  corner_constraints_ = [@[ horizontal, vertical, pad_horizontal, pad_vertical ] retain];
-  [NSLayoutConstraint activateConstraints:corner_constraints_];
-  [self updateCanvasInsets];
 }
 
 - (void)createKeyPadInView:(UIView *)input_view
@@ -792,12 +781,15 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
     [rows.trailingAnchor constraintEqualToAnchor:key_pad_.trailingAnchor constant:-pad_gap],
     [rows.topAnchor constraintEqualToAnchor:key_pad_.topAnchor constant:pad_gap],
     [rows.bottomAnchor constraintEqualToAnchor:key_pad_.bottomAnchor constant:-pad_gap],
+    /* Above the quick bar, at the left of the canvas next to the rail. */
+    [key_pad_.bottomAnchor constraintEqualToAnchor:divider_.topAnchor constant:-pad_gap],
+    [key_pad_.leadingAnchor constraintEqualToAnchor:input_view.leadingAnchor constant:pad_gap],
   ]];
 }
 
 - (void)updateKeyPadVisibility
 {
-  const BOOL hide = !key_pad_wanted_ || self.hidden;
+  const BOOL hide = !key_pad_wanted_ || quick_bar_hidden_;
   if (key_pad_.hidden == hide) {
     return;
   }
@@ -805,146 +797,61 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   [key_pad_.superview bringSubviewToFront:key_pad_];
 }
 
-- (void)updateHandle
+- (void)handleTool:(UIButton *)sender
 {
-  /* A grabber: the bar is always open, so the handle only moves it. */
-  NSString *symbol = @"line.3.horizontal";
-  bool any_active = false;
-  if (!expanded_) {
-    /* Show which key is on while the keys are tucked away. */
-    for (const GHOST_IOSModifierKeyInfo &info : GHOST_IOS_MODIFIER_KEYS) {
-      if (modes_[int(info.modifier)] != GHOST_IOSModifierMode::Off) {
-        symbol = info.symbol;
-        any_active = true;
-        break;
-      }
+  GHOST_IOSStyle_selectionFeedback();
+  [delegate_ commandBarTool:int(sender.tag)];
+}
+
+- (void)setTools:(const GHOST_IOSToolItem *)tools count:(int)count active:(int)active
+{
+  if (tools != tools_ || count != tools_count_) {
+    tools_ = tools;
+    tools_count_ = count;
+    for (UIButton *button in tool_buttons_) {
+      [button removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
+      [tool_stack_ removeArrangedSubview:button];
+      [button removeFromSuperview];
+    }
+    [tool_buttons_ removeAllObjects];
+    for (int i = 0; i < count; i++) {
+      UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+      button.translatesAutoresizingMaskIntoConstraints = NO;
+      button.tag = i;
+      /* Blender's own icon, as its toolbar draws it; a symbol if the app lacks the file. */
+      UIImage *icon = GHOST_IOSToolIcon_image(tools[i].icon, 32.0);
+      [button setImage:icon != nil ? icon : GHOST_IOSStyle_symbol(@(tools[i].symbol), 19.0)
+              forState:UIControlStateNormal];
+      button.tintColor = UIColor.whiteColor;
+      button.layer.cornerRadius = 12.0f;
+      button.layer.cornerCurve = kCACornerCurveContinuous;
+      button.accessibilityLabel = [NSString stringWithUTF8String:tools[i].title];
+      button.accessibilityIdentifier = [NSString stringWithFormat:@"blender_rail_tool_%d", i];
+      [NSLayoutConstraint activateConstraints:@[
+        [button.widthAnchor constraintEqualToConstant:tool_size],
+        [button.heightAnchor constraintEqualToConstant:tool_size],
+      ]];
+      [button addTarget:self
+                    action:@selector(handleTool:)
+          forControlEvents:UIControlEventTouchUpInside];
+      [tool_buttons_ addObject:button];
+      [tool_stack_ addArrangedSubview:button];
     }
   }
-  handle_icon_.image = GHOST_IOSModifierSymbol(symbol, 18.0f);
-  handle_.backgroundColor = any_active ? GHOST_IOSStyle_accentColor() : UIColor.clearColor;
-  handle_.accessibilityValue = expanded_ ? @"expanded" : @"collapsed";
-}
-
-/** Tapping the handle moves the bar to the other side, keeping its half. */
-- (void)handleTap:(UITapGestureRecognizer *)sender
-{
-  if (sender.state != UIGestureRecognizerStateEnded) {
-    return;
+  for (int i = 0; i < int(tool_buttons_.count); i++) {
+    UIButton *button = tool_buttons_[i];
+    const bool is_active = i == active;
+    button.backgroundColor = is_active ? GHOST_IOSStyle_accentColor() :
+                                         [UIColor colorWithWhite:1.0f alpha:0.06f];
+    button.selected = is_active;
   }
-  GHOST_IOSStyle_selectionFeedback();
-  switch (corner_) {
-    case GHOST_IOS_BELT_TOP_LEFT:
-      corner_ = GHOST_IOS_BELT_TOP_RIGHT;
-      break;
-    case GHOST_IOS_BELT_TOP_RIGHT:
-      corner_ = GHOST_IOS_BELT_TOP_LEFT;
-      break;
-    case GHOST_IOS_BELT_BOTTOM_LEFT:
-      corner_ = GHOST_IOS_BELT_BOTTOM_RIGHT;
-      break;
-    default:
-      corner_ = GHOST_IOS_BELT_BOTTOM_LEFT;
-      break;
-  }
-  [NSUserDefaults.standardUserDefaults setInteger:corner_ forKey:GHOST_IOSModifierBeltCorner];
-  [self arrangeForCorner];
-  [self activateCornerConstraints];
-  [self updateHandle];
-  [UIView animateWithDuration:0.25
-                        delay:0.0
-       usingSpringWithDamping:0.9f
-        initialSpringVelocity:0.0f
-                      options:UIViewAnimationOptionAllowUserInteraction
-                   animations:^{
-                     [self.superview layoutIfNeeded];
-                   }
-                   completion:nil];
-}
-
-- (void)handleActionButton:(UIButton *)sender
-{
-  GHOST_IOSStyle_selectionFeedback();
-  [delegate_ commandBarAction:GHOST_IOSBarAction(sender.tag)];
-}
-
-- (void)handlePan:(UIPanGestureRecognizer *)sender
-{
-  UIView *parent = self.superview;
-  if (parent == nil) {
-    return;
-  }
-  const CGPoint translation = [sender translationInView:parent];
-  if (sender.state == UIGestureRecognizerStateBegan ||
-      sender.state == UIGestureRecognizerStateChanged)
-  {
-    self.transform = CGAffineTransformMakeTranslation(translation.x, translation.y);
-    return;
-  }
-  if (sender.state != UIGestureRecognizerStateEnded &&
-      sender.state != UIGestureRecognizerStateCancelled)
-  {
-    return;
-  }
-
-  /* Snap to the corner of the quarter the belt was dropped in. */
-  const CGRect dropped = self.frame;
-  const CGRect safe = parent.safeAreaLayoutGuide.layoutFrame;
-  const CGPoint center = CGPointMake(CGRectGetMidX(dropped), CGRectGetMidY(dropped));
-  const BOOL left = center.x < CGRectGetMidX(safe);
-  const BOOL top = center.y < CGRectGetMidY(safe);
-  corner_ = top ? (left ? GHOST_IOS_BELT_TOP_LEFT : GHOST_IOS_BELT_TOP_RIGHT) :
-                  (left ? GHOST_IOS_BELT_BOTTOM_LEFT : GHOST_IOS_BELT_BOTTOM_RIGHT);
-  [NSUserDefaults.standardUserDefaults setInteger:corner_ forKey:GHOST_IOSModifierBeltCorner];
-  GHOST_IOSStyle_selectionFeedback();
-
-  self.transform = CGAffineTransformIdentity;
-  [self arrangeForCorner];
-  [self activateCornerConstraints];
-  [self updateHandle];
-  [parent layoutIfNeeded];
-  /* Start the animation where the finger let go. */
-  const CGRect settled = self.frame;
-  self.transform = CGAffineTransformMakeTranslation(CGRectGetMinX(dropped) - CGRectGetMinX(settled),
-                                                    CGRectGetMinY(dropped) - CGRectGetMinY(settled));
-  [UIView animateWithDuration:0.35
-                        delay:0.0
-       usingSpringWithDamping:0.82f
-        initialSpringVelocity:0.0f
-                      options:UIViewAnimationOptionAllowUserInteraction
-                   animations:^{
-                     self.transform = CGAffineTransformIdentity;
-                   }
-                   completion:nil];
 }
 
 - (void)setModes:(const GHOST_IOSModifierMode *)modes
 {
-  for (GHOSTIOSModifierKeyView *key in keys_) {
-    const int index = int(key.modifier);
-    modes_[index] = modes[index];
-    [key setMode:modes_[index]];
+  for (GHOSTIOSModifierKeyView *key in quick_modifier_keys_) {
+    [key setMode:modes[int(key.modifier)]];
   }
-  [self updateHandle];
-}
-
-- (void)setCursor:(CGPoint)point visible:(bool)visible
-{
-  /* \a point is in canvas points; the bar may live beside the canvas. */
-  point = [input_view_ convertPoint:point toView:self.superview];
-  const BOOL over = visible && !self.hidden &&
-                    CGRectContainsPoint(CGRectInset(self.frame, -6.0f, -6.0f), point);
-  if (over == cursor_over_) {
-    return;
-  }
-  cursor_over_ = over;
-  [UIView animateWithDuration:0.15
-                        delay:0.0
-                      options:UIViewAnimationOptionAllowUserInteraction |
-                              UIViewAnimationOptionBeginFromCurrentState
-                   animations:^{
-                     self.alpha = over ? cursor_over_alpha : 1.0f;
-                   }
-                   completion:nil];
 }
 
 - (void)updateKeyboardVisibility
@@ -954,19 +861,21 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   const char *belt_mode = getenv("GHOST_IOS_MODIFIER_BELT");
   const bool always = belt_mode != nullptr && strcmp(belt_mode, "always") == 0;
   const BOOL hide = !always && GCKeyboard.coalescedKeyboard != nil;
-  if (self.hidden == hide) {
+  if (quick_bar_hidden_ == hide && quick_bar_.hidden == hide) {
     return;
   }
   os_log_info(GHOST_IOSModifierBeltLog(),
-              "Modifier keys %{public}s: hardware keyboard %{public}s",
+              "Quick bar and modifiers %{public}s: hardware keyboard %{public}s",
               hide ? "hidden" : "shown",
               hide ? "connected" : "disconnected");
-  self.hidden = hide;
+  quick_bar_hidden_ = hide;
+  quick_bar_.hidden = hide;
+  divider_.hidden = hide;
   [self updateKeyPadVisibility];
   [self updateCanvasInsets];
   if (hide) {
-    /* Release any modifier still held; the bar opens again with the keyboard gone. */
-    for (GHOSTIOSModifierKeyView *key in keys_) {
+    /* Release any modifier still held; the keys come back with the keyboard gone. */
+    for (GHOSTIOSModifierKeyView *key in quick_modifier_keys_) {
       [key cancelTracking];
     }
     [delegate_ modifierBeltDidHide];
@@ -990,8 +899,6 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   }
   for (GHOSTIOSCommandKeyButton *key in context_keys_) {
     [key forgetDelegate];
-    [stack_ removeArrangedSubview:key];
-    [key removeFromSuperview];
   }
   [context_keys_ removeAllObjects];
   context_key_count_ = count;
@@ -1007,14 +914,13 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
     NSString *identifier = [NSString stringWithFormat:@"blender_command_key_%d", i];
     GHOSTIOSCommandKeyButton *key = [GHOSTIOSCommandKeyButton keyWithInfo:copy
                                                                  delegate:delegate_
-                                                                    width:key_width
+                                                                    width:command_key_width
                                                                    height:command_key_height
                                                                identifier:identifier];
-    key.hidden = !expanded_;
     [key setEditIndex:i];
     [context_keys_ addObject:key];
   }
-  [self arrangeForCorner];
+  [self arrangeQuickBar];
 }
 
 - (void)setKeyPadVisible:(BOOL)visible
@@ -1030,7 +936,12 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
 
 - (BOOL)containsView:(UIView *)view
 {
-  return [view isDescendantOfView:self] || [view isDescendantOfView:key_pad_];
+  for (UIView *part in @[ tool_panel_, quick_bar_, divider_, key_pad_ ]) {
+    if ([view isDescendantOfView:part]) {
+      return YES;
+    }
+  }
+  return NO;
 }
 
 @end
@@ -1073,14 +984,19 @@ void GHOST_IOSModifierBelt_setModes(NSObject *belt,
   [(GHOSTIOSModifierBeltView *)belt setModes:modes];
 }
 
-void GHOST_IOSModifierBelt_setCursor(NSObject *belt, CGPoint point, bool visible)
-{
-  [(GHOSTIOSModifierBeltView *)belt setCursor:point visible:visible];
-}
+void GHOST_IOSModifierBelt_setCursor(NSObject * /*belt*/, CGPoint /*point*/, bool /*visible*/) {}
 
 void GHOST_IOSModifierBelt_setContextKeys(NSObject *belt, const GHOST_IOSBarKey *keys, int count)
 {
   [(GHOSTIOSModifierBeltView *)belt setContextKeys:keys count:count];
+}
+
+void GHOST_IOSModifierBelt_setTools(NSObject *belt,
+                                    const GHOST_IOSToolItem *tools,
+                                    int count,
+                                    int active)
+{
+  [(GHOSTIOSModifierBeltView *)belt setTools:tools count:count active:active];
 }
 
 void GHOST_IOSModifierBelt_setKeyPadVisible(NSObject *belt, bool visible)

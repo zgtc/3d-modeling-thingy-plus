@@ -37,6 +37,8 @@ enum class GHOST_IOSMode : uint8_t {
 constexpr int GHOST_IOS_IDNAME_MAX = 64;
 constexpr int GHOST_IOS_COMMAND_MAX = 256;
 constexpr int GHOST_IOS_RESIZE_EDGE_MAX = 8;
+constexpr int GHOST_IOS_WORKSPACE_MAX = 16;
+constexpr int GHOST_IOS_WORKSPACE_NAME_MAX = 32;
 
 /**
  * The draggable edge of a visible sidebar or toolbar, in GHOST client pixels (origin top left).
@@ -56,6 +58,27 @@ struct GHOST_IOSResizeEdge {
   }
 };
 
+/** Keyboard shortcuts of a running modal tool, for the quick bar. */
+constexpr int GHOST_IOS_MODAL_KEY_MAX = 6;
+constexpr uint8_t GHOST_IOS_MODAL_KEY_SHIFT = 1 << 0;
+constexpr uint8_t GHOST_IOS_MODAL_KEY_CTRL = 1 << 1;
+constexpr uint8_t GHOST_IOS_MODAL_KEY_ALT = 1 << 2;
+constexpr uint8_t GHOST_IOS_MODAL_KEY_OS = 1 << 3;
+
+struct GHOST_IOSModalKey {
+  char title[24] = "";
+  /** A #GHOST_TKey. */
+  int key = 0;
+  /** #GHOST_IOS_MODAL_KEY_SHIFT and friends. */
+  uint8_t modifiers = 0;
+
+  bool operator==(const GHOST_IOSModalKey &other) const
+  {
+    return key == other.key && modifiers == other.modifiers &&
+           std::strcmp(title, other.title) == 0;
+  }
+};
+
 struct GHOST_IOSInteractionContext {
   GHOST_IOSEditor editor = GHOST_IOSEditor::Other;
   GHOST_IOSMode mode = GHOST_IOSMode::Object;
@@ -68,13 +91,63 @@ struct GHOST_IOSInteractionContext {
   /** Resizable sidebars and toolbars in the whole window. */
   GHOST_IOSResizeEdge resize_edges[GHOST_IOS_RESIZE_EDGE_MAX];
   int resize_edges_num = 0;
+  /** The window's workspaces in tab order, and the active one, or -1. */
+  char workspaces[GHOST_IOS_WORKSPACE_MAX][GHOST_IOS_WORKSPACE_NAME_MAX] = {};
+  int workspaces_num = 0;
+  int active_workspace = -1;
+  /**
+   * The timeline along the bottom, if any: its right edge and the top and bottom of its header
+   * row, in GHOST client pixels. The minimize control sits at that right edge.
+   */
+  bool has_timeline = false;
+  int timeline_right = 0;
+  int timeline_header_top = 0;
+  int timeline_header_bottom = 0;
+  /** Height of the whole timeline area, in GHOST client pixels. */
+  int timeline_height = 0;
+  /**
+   * Keyboard shortcuts of the running modal tool, from its modal keymap, in the order its status
+   * line lists them. Mouse buttons are left out. The quick bar shows these while the tool runs.
+   */
+  GHOST_IOSModalKey modal_keys[GHOST_IOS_MODAL_KEY_MAX];
+  int modal_keys_num = 0;
+
+  bool sameModalKeys(const GHOST_IOSInteractionContext &other) const
+  {
+    if (modal_keys_num != other.modal_keys_num) {
+      return false;
+    }
+    for (int i = 0; i < modal_keys_num; i++) {
+      if (!(modal_keys[i] == other.modal_keys[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   bool operator==(const GHOST_IOSInteractionContext &other) const
   {
     return editor == other.editor && mode == other.mode &&
            over_main_region == other.over_main_region &&
            std::strcmp(modal_operator, other.modal_operator) == 0 &&
-           std::strcmp(tool, other.tool) == 0 && sameResizeEdges(other);
+           std::strcmp(tool, other.tool) == 0 && sameResizeEdges(other) &&
+           sameWorkspaces(other) && has_timeline == other.has_timeline &&
+           timeline_right == other.timeline_right &&
+           timeline_header_top == other.timeline_header_top &&
+           timeline_header_bottom == other.timeline_header_bottom &&
+           timeline_height == other.timeline_height && sameModalKeys(other);
+  }
+  bool sameWorkspaces(const GHOST_IOSInteractionContext &other) const
+  {
+    if (workspaces_num != other.workspaces_num || active_workspace != other.active_workspace) {
+      return false;
+    }
+    for (int i = 0; i < workspaces_num; i++) {
+      if (std::strcmp(workspaces[i], other.workspaces[i]) != 0) {
+        return false;
+      }
+    }
+    return true;
   }
   bool sameResizeEdges(const GHOST_IOSInteractionContext &other) const
   {
@@ -102,6 +175,11 @@ struct GHOST_IOSInteractionContext {
  * under the pointer. Ids starting with `ios.` are handled by the window manager's iOS shim:
  * - `ios.open_editor` with `space=PROPERTIES` or `space=OUTLINER` opens a floating editor.
  * - `ios.touch_spacing` with `enabled=1` or `enabled=0` sets the touch spacing preset.
+ * - `ios.workspace` with `name=<workspace>` makes that workspace active.
+ * - `ios.timeline` with `minimized=1` or `minimized=0` shrinks the bottom timeline to its header
+ *   or gives it back a few rows.
+ * - `ios.native_chrome` with `enabled=1` hides Blender's top bar for the native header, and
+ *   hides the 3D Viewport tool shelf once, for the native tool dock.
  */
 inline bool GHOST_IOSCommand_format(char command[GHOST_IOS_COMMAND_MAX],
                                     const char *idname,

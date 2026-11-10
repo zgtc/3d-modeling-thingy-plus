@@ -6,11 +6,14 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "MEM_guardedalloc.h"
+
 #include "BKE_context.hh"
 #include "BKE_layer.hh"
 #include "BKE_main.hh"
 #include "BKE_screen.hh"
 #include "BKE_wm_runtime.hh"
+#include "BLI_listbase.h"
 #include "BLI_listbase_iterator.hh"
 #include "BLI_math_vector.h"
 #include "BLI_rect.h"
@@ -35,9 +38,13 @@
 #include "WM_toolsystem.hh"
 #include "WM_types.hh"
 
+#include "ED_screen.hh"
+
 #include "GHOST_IOSInteraction.hh"
 
 #include "wm_event_system.hh"
+#include "wm_ios_layout.hh"
+#include "wm_ios_status_keys.hh"
 #include "wm_window.hh"
 
 namespace blender {
@@ -195,6 +202,129 @@ static GHOST_IOSMode wm_ios_mode(const Main &bmain, wmWindow &win, const ScrArea
   return wm_ios_object_mode(BKE_view_layer_active_object_get(view_layer));
 }
 
+/** The timeline along the bottom of \a screen: the lowest timeline editor, or null. */
+static ScrArea *wm_ios_bottom_timeline(bScreen &screen)
+{
+  ScrArea *bottom = nullptr;
+  for (ScrArea &area : screen.areabase) {
+    const SpaceAction *saction = area.spacetype == SPACE_ACTION ?
+                                     static_cast<const SpaceAction *>(area.spacedata.first) :
+                                     nullptr;
+    if (saction != nullptr && saction->mode == SACTCONT_TIMELINE &&
+        (bottom == nullptr || area.totrct.ymin < bottom->totrct.ymin))
+    {
+      bottom = &area;
+    }
+  }
+  return bottom;
+}
+
+/** Where the native minimize control goes: the right end of the timeline's header row. */
+static void wm_ios_timeline_rect(wmWindow &win, bScreen &screen, GHOST_IOSInteractionContext &context)
+{
+  ScrArea *area = wm_ios_bottom_timeline(screen);
+  if (area == nullptr) {
+    return;
+  }
+  const ARegion *header = nullptr;
+  for (const ARegion &region : area->regionbase) {
+    if (region.regiontype == RGN_TYPE_HEADER && region.runtime != nullptr &&
+        region.runtime->visible)
+    {
+      header = &region;
+    }
+  }
+  const rcti &rect = header != nullptr ? header->winrct : area->totrct;
+  int x = area->totrct.xmax, y_top = rect.ymax, x_bottom = x, y_bottom = rect.ymin;
+  wm_cursor_position_to_ghost_client_coords(&win, &x, &y_top);
+  wm_cursor_position_to_ghost_client_coords(&win, &x_bottom, &y_bottom);
+  context.has_timeline = true;
+  context.timeline_right = x;
+  context.timeline_header_top = y_top;
+  context.timeline_header_bottom = y_bottom;
+  context.timeline_height = area->v2->vec.y - area->v1->vec.y;
+}
+
+/** Timeline height before it was minimized, in window pixels, to give back when expanded. */
+static int wm_ios_timeline_expanded_height = 0;
+
+/** Move the top edge of the bottom timeline so it is \a target pixels high. */
+static void wm_ios_resize_timeline(bScreen &screen, ScrArea &area, const int target)
+{
+  const int bottom = area.v1->vec.y;
+  const int top = area.v2->vec.y;
+  if (target == top - bottom) {
+    return;
+  }
+  const int new_top = bottom + target;
+  const int left = area.v1->vec.x;
+  const int right = area.v4->vec.x;
+  /* Areas share their corner vertices, so moving the edge resizes the editor above too. */
+  for (ScrVert &vert : screen.vertbase) {
+    if (vert.vec.y == top && vert.vec.x >= left && vert.vec.x <= right) {
+      vert.vec.y = short(new_top);
+    }
+  }
+  screen.do_refresh = true;
+}
+
+/**
+ * Minimized, the bottom timeline is only its header row and the 3D Viewport above takes the room;
+ * expanded, it gets back the height it had, at least a few rows.
+ */
+static void wm_ios_set_timeline_minimized(wmWindow &win, const bool minimized)
+{
+  bScreen *screen = WM_window_get_active_screen(&win);
+  if (screen == nullptr) {
+    return;
+  }
+  ScrArea *area = wm_ios_bottom_timeline(*screen);
+  if (area == nullptr || area->v1 == nullptr || area->v2 == nullptr || area->v4 == nullptr) {
+    return;
+  }
+  const int header = ED_area_headersize();
+  const int bottom = area->v1->vec.y;
+  const int top = area->v2->vec.y;
+  const int height = top - bottom;
+  int target = height;
+  if (minimized) {
+    if (height > header + 2) {
+      wm_ios_timeline_expanded_height = height;
+    }
+    target = header + 1;
+  }
+  else {
+    target = std::max(wm_ios_timeline_expanded_height, header * 5);
+  }
+  wm_ios_resize_timeline(*screen, *area, target);
+}
+
+/**
+ * Set the bottom timeline's height, from a drag of the divider above the quick bar: at least its
+ * header row, and never more than half the screen so the editors above keep their room.
+ */
+static void wm_ios_set_timeline_height(wmWindow &win, const int height)
+{
+  bScreen *screen = WM_window_get_active_screen(&win);
+  if (screen == nullptr) {
+    return;
+  }
+  ScrArea *area = wm_ios_bottom_timeline(*screen);
+  if (area == nullptr || area->v1 == nullptr || area->v2 == nullptr || area->v4 == nullptr) {
+    return;
+  }
+  int screen_top = 0;
+  for (const ScrVert &vert : screen->vertbase) {
+    screen_top = std::max(screen_top, int(vert.vec.y));
+  }
+  const int header = ED_area_headersize();
+  const int target = std::clamp(height, header + 1, std::max(header + 1, screen_top / 2));
+  if (target > header + 2) {
+    wm_ios_timeline_expanded_height = target;
+  }
+  wm_ios_resize_timeline(*screen, *area, target);
+}
+
 /**
  * The draggable edges of visible sidebars and toolbars, for the native grab handles. Blender's own
  * resize zone sits on the region's inner edge (see `region_azone_edge`).
@@ -233,7 +363,66 @@ static void wm_ios_resize_edges(wmWindow &win, bScreen &screen, GHOST_IOSInterac
   }
 }
 
-static GHOST_IOSInteractionContext wm_ios_interaction_context(const Main &bmain, wmWindow &win)
+/**
+ * The keyboard shortcuts of the innermost modal tool that has a modal keymap, in the order its
+ * status line lists them, for the quick bar. Mouse bindings are left out: on a touch screen they
+ * are of no use, and the status line drops them too.
+ */
+static void wm_ios_modal_keys(wmWindowManager &wm,
+                              wmWindow &win,
+                              GHOST_IOSInteractionContext &context)
+{
+  wmOperator *op = nullptr;
+  wmKeyMap *keymap = nullptr;
+  for (wmEventHandler &handler_base : win.runtime->modalhandlers) {
+    if (handler_base.type != WM_HANDLER_TYPE_OP) {
+      continue;
+    }
+    wmEventHandler_Op &handler = reinterpret_cast<wmEventHandler_Op &>(handler_base);
+    if (handler.op == nullptr) {
+      continue;
+    }
+    wmOperator *op_test = handler.op->opm ? handler.op->opm : handler.op;
+    wmKeyMap *keymap_test = WM_keymap_active(&wm, op_test->type->modalkeymap);
+    if (keymap_test && keymap_test->modal_items) {
+      op = op_test;
+      keymap = keymap_test;
+      break;
+    }
+  }
+  if (keymap == nullptr) {
+    return;
+  }
+  const EnumPropertyItem *items = static_cast<const EnumPropertyItem *>(keymap->modal_items);
+  for (int i = 0; items[i].identifier && context.modal_keys_num < GHOST_IOS_MODAL_KEY_MAX; i++) {
+    if (items[i].identifier[0] == '\0') {
+      continue;
+    }
+    if (keymap->poll_modal_item && !keymap->poll_modal_item(op, items[i].value)) {
+      continue;
+    }
+    for (const wmKeyMapItem &kmi : keymap->items) {
+      if (kmi.propvalue != items[i].value || (kmi.flag & KMI_INACTIVE) || kmi.val == KM_RELEASE)
+      {
+        continue;
+      }
+      if (wm_ios_modal_key_add(context,
+                               IFACE_(items[i].name),
+                               kmi.type,
+                               kmi.shift == KM_MOD_HELD,
+                               kmi.ctrl == KM_MOD_HELD,
+                               kmi.alt == KM_MOD_HELD,
+                               kmi.oskey == KM_MOD_HELD))
+      {
+        break;
+      }
+    }
+  }
+}
+
+static GHOST_IOSInteractionContext wm_ios_interaction_context(wmWindowManager &wm,
+                                                              const Main &bmain,
+                                                              wmWindow &win)
 {
   GHOST_IOSInteractionContext context;
   const wmEvent *eventstate = win.runtime->eventstate;
@@ -253,6 +442,7 @@ static GHOST_IOSInteractionContext wm_ios_interaction_context(const Main &bmain,
       break;
     }
   }
+  wm_ios_modal_keys(wm, win, context);
 
   ScrArea *area = BKE_screen_find_area_xy(screen, SPACE_TYPE_ANY, eventstate->xy);
   if (area == nullptr) {
@@ -264,6 +454,19 @@ static GHOST_IOSInteractionContext wm_ios_interaction_context(const Main &bmain,
   context.over_main_region = region != nullptr && region->regiontype == RGN_TYPE_WINDOW;
 
   wm_ios_resize_edges(win, *screen, context);
+  wm_ios_timeline_rect(win, *screen, context);
+
+  /* Workspace tabs, in Blender's order. */
+  const WorkSpace *active_workspace = WM_window_get_active_workspace(&win);
+  for (const WorkSpace &workspace : bmain.workspaces) {
+    if (context.workspaces_num == GHOST_IOS_WORKSPACE_MAX) {
+      break;
+    }
+    if (&workspace == active_workspace) {
+      context.active_workspace = context.workspaces_num;
+    }
+    STRNCPY(context.workspaces[context.workspaces_num++], workspace.id.name + 2);
+  }
 
   WorkSpace *workspace = WM_window_get_active_workspace(&win);
   bToolKey tkey;
@@ -318,16 +521,12 @@ static void wm_ios_command_property(bContext *C,
 }
 
 /** Spacing in #uiStyle before the touch preset changed it, to restore it exactly. */
-struct WMIOSStyleSpacing {
-  bool saved = false;
-  short columnspace, templatespace, boxspace, buttonspacex, buttonspacey, panelspace, panelouter;
-  float widget_points, grouplabel_points, paneltitle_points;
-};
 static WMIOSStyleSpacing wm_ios_default_spacing;
 
 /**
- * Touch spacing preset: more room between buttons, rows and panels, so a finger lands on the
- * intended one, and slightly larger text. The global UI scale is left alone.
+ * Touch spacing preset: more room beside buttons so a finger lands on the intended one, a little
+ * more between rows and panels, and slightly larger text (#wm_ios_touch_spacing). The global UI
+ * scale is left alone.
  */
 static void wm_ios_set_touch_spacing(const bool enabled)
 {
@@ -349,24 +548,96 @@ static void wm_ios_set_touch_spacing(const bool enabled)
                style->grouplabel.points,
                style->paneltitle.points};
   }
-  const float factor = enabled ? 2.0f : 1.0f;
-  style->columnspace = short(spacing.columnspace * factor);
-  style->templatespace = short(spacing.templatespace * factor);
-  style->boxspace = short(spacing.boxspace * factor);
-  style->buttonspacex = short(spacing.buttonspacex * factor);
-  style->buttonspacey = short(spacing.buttonspacey * factor + (enabled ? 4 : 0));
-  style->panelspace = short(spacing.panelspace * factor);
-  style->panelouter = short(spacing.panelouter * factor);
-  const float text_factor = enabled ? 1.15f : 1.0f;
-  style->widget.points = spacing.widget_points * text_factor;
-  style->grouplabel.points = spacing.grouplabel_points * text_factor;
-  style->paneltitle.points = spacing.paneltitle_points * text_factor;
+  const WMIOSStyleSpacing touch = wm_ios_touch_spacing(spacing, enabled);
+  style->columnspace = touch.columnspace;
+  style->templatespace = touch.templatespace;
+  style->boxspace = touch.boxspace;
+  style->buttonspacex = touch.buttonspacex;
+  style->buttonspacey = touch.buttonspacey;
+  style->panelspace = touch.panelspace;
+  style->panelouter = touch.panelouter;
+  style->widget.points = touch.widget_points;
+  style->grouplabel.points = touch.grouplabel_points;
+  style->paneltitle.points = touch.paneltitle_points;
   WM_main_add_notifier(NC_WINDOW, nullptr);
+}
+
+/** The iPad's native header and tool dock are active. */
+static bool wm_ios_native_chrome = false;
+
+/** Hide the 3D Viewport tool shelf once, when the native tool dock takes its place. */
+static void wm_ios_hide_tool_shelves(Main &bmain)
+{
+  for (bScreen &screen : bmain.screens) {
+    for (ScrArea &area : screen.areabase) {
+      if (area.spacetype != SPACE_VIEW3D) {
+        continue;
+      }
+      for (ARegion &region : area.regionbase) {
+        if (region.regiontype == RGN_TYPE_TOOLS && !(region.flag & RGN_FLAG_HIDDEN)) {
+          region.flag |= RGN_FLAG_HIDDEN;
+          screen.do_refresh = true;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Keep Blender's top bar hidden while the native header replaces it. Leaving Focus mode
+ * shows every global area again, so this runs on every main loop pass.
+ */
+static void wm_ios_hide_topbar(wmWindow &win)
+{
+  for (ScrArea &area : win.global_areas.areabase) {
+    if (area.spacetype == SPACE_TOPBAR && area.global != nullptr &&
+        !(area.global->flag & GLOBAL_AREA_IS_HIDDEN))
+    {
+      area.global->flag |= GLOBAL_AREA_IS_HIDDEN;
+      if (bScreen *screen = WM_window_get_active_screen(&win)) {
+        screen->do_refresh = true;
+      }
+    }
+  }
 }
 
 /** Commands for the touch layer that are not operators. */
 static bool wm_ios_run_builtin(bContext *C, const char *idname, const char *name, const char *value)
 {
+  if (STREQ(idname, "ios.workspace")) {
+    if (name != nullptr && STREQ(name, "name")) {
+      Main *bmain = CTX_data_main(C);
+      wmWindow *win = CTX_wm_window(C);
+      WorkSpace *workspace = static_cast<WorkSpace *>(
+          BLI_findstring(&bmain->workspaces, value, offsetof(ID, name) + 2));
+      if (workspace != nullptr && win != nullptr &&
+          workspace != WM_window_get_active_workspace(win))
+      {
+        WM_window_set_active_workspace(C, win, workspace);
+      }
+    }
+    return true;
+  }
+  if (STREQ(idname, "ios.timeline")) {
+    if (wmWindow *win = CTX_wm_window(C)) {
+      if (name != nullptr && STREQ(name, "height")) {
+        wm_ios_set_timeline_height(*win, std::atoi(value));
+      }
+      else {
+        wm_ios_set_timeline_minimized(
+            *win, name != nullptr && STREQ(name, "minimized") && STREQ(value, "1"));
+      }
+    }
+    return true;
+  }
+  if (STREQ(idname, "ios.native_chrome")) {
+    const bool enabled = name != nullptr && STREQ(name, "enabled") && STREQ(value, "1");
+    if (enabled && !wm_ios_native_chrome) {
+      wm_ios_hide_tool_shelves(*CTX_data_main(C));
+    }
+    wm_ios_native_chrome = enabled;
+    return true;
+  }
   if (STREQ(idname, "ios.touch_spacing")) {
     wm_ios_set_touch_spacing(name != nullptr && STREQ(name, "enabled") && STREQ(value, "1"));
     return true;
@@ -484,7 +755,10 @@ void wm_ios_touch_channel_update(bContext *C)
     while (GHOST_IOS_TakeCommand(ghost_window, command)) {
       wm_ios_run_command(C, win, command);
     }
-    GHOST_IOS_SetInteractionContext(ghost_window, wm_ios_interaction_context(*bmain, win));
+    if (wm_ios_native_chrome) {
+      wm_ios_hide_topbar(win);
+    }
+    GHOST_IOS_SetInteractionContext(ghost_window, wm_ios_interaction_context(*wm, *bmain, win));
   }
 }
 
@@ -497,9 +771,8 @@ void wm_ios_touch_channel_update(bContext *C)
  * \{ */
 
 /**
- * Give the Outliner and Properties column on the right more room, so item names are not cut
- * off at the touch UI scale. The column grows by a third, to at least a quarter of the screen,
- * and never past half of it.
+ * Give the Outliner and Properties column on the right more room, so item names and property
+ * labels are not cut off at the touch UI scale (#wm_ios_right_column_left).
  */
 static void wm_ios_widen_right_column(bScreen &screen)
 {
@@ -516,9 +789,7 @@ static void wm_ios_widen_right_column(bScreen &screen)
   if (column_left <= 0 || column_left >= screen_right) {
     return;
   }
-  const int width = screen_right - column_left;
-  const int wanted = std::max(width * 4 / 3, screen_right / 4);
-  const int new_left = std::max(screen_right - wanted, screen_right / 2);
+  const int new_left = wm_ios_right_column_left(screen_right, column_left);
   if (new_left >= column_left) {
     return;
   }
@@ -528,6 +799,124 @@ static void wm_ios_widen_right_column(bScreen &screen)
       vert.vec.x = short(new_left);
     }
   }
+}
+
+/**
+ * Give the Outliner at the top of the right column at least two fifths of the column's height
+ * (#wm_ios_outliner_bottom), so more of the scene's hierarchy shows at once.
+ */
+static void wm_ios_grow_outliner(bScreen &screen)
+{
+  int screen_right = 0;
+  for (const ScrVert &vert : screen.vertbase) {
+    screen_right = std::max(screen_right, int(vert.vec.x));
+  }
+  for (ScrArea &outliner : screen.areabase) {
+    if (outliner.spacetype != SPACE_OUTLINER || outliner.v4->vec.x != screen_right) {
+      continue;
+    }
+    /* The editor directly below it, sharing its bottom edge. */
+    const int left = outliner.v1->vec.x;
+    const int bottom = outliner.v1->vec.y;
+    for (const ScrArea &below : screen.areabase) {
+      if (&below == &outliner || below.v2->vec.y != bottom || below.v1->vec.x != left ||
+          below.v4->vec.x != screen_right)
+      {
+        continue;
+      }
+      const int new_bottom = wm_ios_outliner_bottom(
+          outliner.v2->vec.y, below.v1->vec.y, bottom);
+      if (new_bottom >= bottom || new_bottom <= below.v1->vec.y + HEADERY * 2) {
+        break;
+      }
+      for (ScrVert &vert : screen.vertbase) {
+        if (vert.vec.y == bottom && vert.vec.x >= left && vert.vec.x <= screen_right) {
+          vert.vec.y = short(new_bottom);
+        }
+      }
+      break;
+    }
+    break;
+  }
+}
+
+/** Add the edge from \a v1 to \a v2 unless the screen has it, marking edges on its border. */
+static void wm_ios_ensure_edge(bScreen &screen,
+                               ScrVert *v1,
+                               ScrVert *v2,
+                               const int screen_right,
+                               const int screen_top)
+{
+  if (BKE_screen_find_edge(&screen, v1, v2) != nullptr) {
+    return;
+  }
+  ScrEdge *edge = MEM_new<ScrEdge>("wm_ios_ensure_edge");
+  BKE_screen_sort_scrvert(&v1, &v2);
+  edge->v1 = v1;
+  edge->v2 = v2;
+  const bool vertical = v1->vec.x == v2->vec.x;
+  edge->border = vertical ? short(ELEM(v1->vec.x, 0, screen_right)) :
+                            short(ELEM(v1->vec.y, 0, screen_top));
+  BLI_addtail(&screen.edgebase, edge);
+}
+
+/**
+ * Let the Outliner and Properties column run the full height of the screen: the timeline along
+ * the bottom stops where the column begins (#wm_ios_column_past_timeline).
+ */
+static void wm_ios_full_height_column(bScreen &screen)
+{
+  int screen_right = 0;
+  int screen_top = 0;
+  for (const ScrVert &vert : screen.vertbase) {
+    screen_right = std::max(screen_right, int(vert.vec.x));
+    screen_top = std::max(screen_top, int(vert.vec.y));
+  }
+  ScrArea *timeline = nullptr;
+  for (ScrArea &area : screen.areabase) {
+    const SpaceAction *saction = area.spacetype == SPACE_ACTION ?
+                                     static_cast<const SpaceAction *>(area.spacedata.first) :
+                                     nullptr;
+    if (saction != nullptr && saction->mode == SACTCONT_TIMELINE && area.v1->vec.y == 0 &&
+        area.v4->vec.x == screen_right)
+    {
+      timeline = &area;
+      break;
+    }
+  }
+  if (timeline == nullptr) {
+    return;
+  }
+  ScrArea *column = nullptr;
+  for (ScrArea &area : screen.areabase) {
+    if (ELEM(area.spacetype, SPACE_OUTLINER, SPACE_PROPERTIES) && area.v4 == timeline->v3 &&
+        area.v1->vec.y == timeline->v2->vec.y)
+    {
+      column = &area;
+      break;
+    }
+  }
+  if (column == nullptr) {
+    return;
+  }
+  const bool changed = wm_ios_column_past_timeline(*timeline, *column, [&](short x, short y) {
+    ScrVert *vert = MEM_new<ScrVert>("wm_ios_full_height_column");
+    vert->vec.x = x;
+    vert->vec.y = y;
+    BLI_addtail(&screen.vertbase, vert);
+    return vert;
+  });
+  if (!changed) {
+    return;
+  }
+  for (ScrArea *area : {timeline, column}) {
+    wm_ios_ensure_edge(screen, area->v1, area->v2, screen_right, screen_top);
+    wm_ios_ensure_edge(screen, area->v2, area->v3, screen_right, screen_top);
+    wm_ios_ensure_edge(screen, area->v3, area->v4, screen_right, screen_top);
+    wm_ios_ensure_edge(screen, area->v4, area->v1, screen_right, screen_top);
+  }
+  BKE_screen_remove_unused_scredges(&screen);
+  BKE_screen_remove_unused_scrverts(&screen);
 }
 
 /** Shrink a timeline along the bottom of the screen to its header: a single row of controls. */
@@ -559,6 +948,8 @@ void wm_ios_update_startup_defaults(Main *bmain, const char * /*app_template*/)
 {
   for (bScreen &screen : bmain->screens) {
     wm_ios_widen_right_column(screen);
+    wm_ios_grow_outliner(screen);
+    wm_ios_full_height_column(screen);
     wm_ios_collapse_timeline(screen);
   }
 }

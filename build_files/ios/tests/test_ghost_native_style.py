@@ -44,8 +44,8 @@ class GhostNativeStyleTests(unittest.TestCase):
         self.assertNotIn("close_window_button.backgroundColor", window)
         self.assertIn("GHOST_IOSStyle_applyFloatingButton(button_", ACCESS_SOURCE.read_text())
         belt = BELT_SOURCE.read_text()
-        self.assertIn("GHOST_IOSStyle_createMaterialView(belt_width * 0.5f)", belt)
-        self.assertIn("handle_size = GHOST_IOS_CONTROL_SIZE", belt)
+        self.assertIn("GHOST_IOSStyle_createMaterialView(radius)", belt)
+        self.assertIn("tool_size = GHOST_IOS_CONTROL_SIZE", belt)
 
     def test_text_entry_done_is_prominent_on_ios_26(self) -> None:
         window = WINDOW_SOURCE.read_text()

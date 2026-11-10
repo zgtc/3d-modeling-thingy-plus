@@ -3791,6 +3791,22 @@ static void outliner_draw_highlights(const ARegion *region,
     draw_roundbox_corner_set(ui::CNR_ALL);
 
     /* Selection status. */
+#ifdef BLENDER_PLATFORM_TOUCH_OUTLINER
+    /* Touch screens: selected rows are outlined, the active row is filled with the active colour,
+     * so both read at a glance without a hover highlight. */
+    float col_active_outline[4];
+    ui::theme::get_color_shade_4fv(TH_SELECT_ACTIVE, 40, col_active_outline);
+    const float outline_width = 2.0f * U.pixelsize;
+    if ((tselem->flag & TSE_ACTIVE) && (tselem->flag & TSE_SELECTED)) {
+      ui::draw_roundbox_4fv_ex(
+          &rect, col_active, nullptr, 1.0f, col_active_outline, outline_width, radius);
+    }
+    else if (tselem->flag & TSE_SELECTED) {
+      ui::draw_roundbox_4fv_ex(
+          &rect, nullptr, nullptr, 1.0f, col_active_outline, outline_width, radius);
+    }
+    UNUSED_VARS(col_selection);
+#else
     if ((tselem->flag & TSE_ACTIVE) && (tselem->flag & TSE_SELECTED)) {
       ui::draw_roundbox_4fv(&rect, true, radius, col_active);
 
@@ -3801,6 +3817,7 @@ static void outliner_draw_highlights(const ARegion *region,
     else if (tselem->flag & TSE_SELECTED) {
       ui::draw_roundbox_4fv(&rect, true, radius, col_selection);
     }
+#endif
 
     /* Highlights. */
     if (tselem->flag & (TSE_DRAG_ANY | TSE_HIGHLIGHTED | TSE_SEARCHMATCH)) {

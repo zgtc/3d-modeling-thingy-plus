@@ -99,6 +99,25 @@ a second to replace it. Type one of these:
 Each editor and mode keeps its own set. **Reset to Default** restores one key;
 **Reset Custom Slots and Keys** in settings restores them all.
 
+## Header and tool dock
+
+On iPad, a strip along the top replaces Blender's top bar:
+
+- **Menu button**: Blender's File, Edit, Render, Window, and Help menus, plus
+  the menus for the editor and mode under the cursor.
+- **Workspace tabs**: scroll sideways to see them all. The active workspace is
+  highlighted.
+
+A dock along the bottom holds the tools of the current 3D Viewport mode, so the
+tool shelf on the left of the viewport starts hidden. Tap a tool to use it. The
+active tool is highlighted. Swipe in from the left edge to show the tool shelf
+again when you want it.
+
+The Pencil squeeze palette also has the tools: tap the middle of the ring to
+switch between its commands and the tools, and tap it again to switch back.
+
+On iPhone, Blender's top bar and tool shelf stay as they are.
+
 ## Panels
 
 | Action | How |

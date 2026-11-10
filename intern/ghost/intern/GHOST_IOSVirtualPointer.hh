@@ -57,6 +57,8 @@ class GHOST_IOSVirtualPointer {
   void getClientPosition(double &x, double &y) const;
   GHOST_TSuccess getCursorPosition(int32_t &screen_x, int32_t &screen_y) const;
   void setBlenderVisibility(bool visible);
+  /** Hide the drawn pointer while a text field is being edited. */
+  void setTextEditing(bool editing);
   void setGrabMode(GHOST_TGrabCursorMode mode);
 
  private:
