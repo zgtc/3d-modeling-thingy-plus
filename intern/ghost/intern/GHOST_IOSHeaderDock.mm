@@ -7,8 +7,8 @@
  * The iPad's native header and tool dock.
  *
  * The header sits above Blender's canvas in place of Blender's top bar: one menu button with
- * Blender's top bar menus and the menus of the editor under the pointer, an Object / Edit /
- * Sculpt mode switch, and the workspace tabs in a strip that scrolls sideways. The dock sits
+ * Blender's top bar menus and the menus of the editor under the pointer, and the workspace tabs
+ * in a strip that scrolls sideways. The mode stays in the 3D Viewport's own mode menu. The dock sits
  * below the canvas with the tools of the current 3D Viewport mode, so the tool shelf on the left
  * of the viewport can stay hidden. The canvas is inset for both, so they never cover it.
  */
@@ -34,7 +34,6 @@ static constexpr CGFloat tool_width = 64.0f;
 
   UIView *header_;
   UIButton *menu_button_;
-  UISegmentedControl *mode_switch_;
   UIScrollView *tab_scroll_;
   UIStackView *tab_stack_;
 
@@ -109,19 +108,6 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
       }] ]];
   [header_ addSubview:menu_button_];
 
-  NSMutableArray<NSString *> *titles = [NSMutableArray array];
-  for (const GHOST_IOSModeSegment &segment : GHOST_IOS_MODE_SEGMENTS) {
-    [titles addObject:[NSString stringWithUTF8String:segment.title]];
-  }
-  mode_switch_ = [[UISegmentedControl alloc] initWithItems:titles];
-  mode_switch_.translatesAutoresizingMaskIntoConstraints = NO;
-  mode_switch_.selectedSegmentIndex = 0;
-  mode_switch_.accessibilityIdentifier = @"blender_mode_switch";
-  [mode_switch_ addTarget:self
-                   action:@selector(handleModeSwitch:)
-         forControlEvents:UIControlEventValueChanged];
-  [header_ addSubview:mode_switch_];
-
   tab_scroll_ = [[UIScrollView alloc] init];
   tab_scroll_.translatesAutoresizingMaskIntoConstraints = NO;
   tab_scroll_.showsHorizontalScrollIndicator = NO;
@@ -159,10 +145,7 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
                                                constant:GHOST_IOS_HEADER_HEIGHT * 0.5],
     [menu_button_.widthAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
     [menu_button_.heightAnchor constraintEqualToConstant:GHOST_IOS_CONTROL_SIZE],
-    [mode_switch_.leadingAnchor constraintEqualToAnchor:menu_button_.trailingAnchor
-                                               constant:padding],
-    [mode_switch_.centerYAnchor constraintEqualToAnchor:menu_button_.centerYAnchor],
-    [tab_scroll_.leadingAnchor constraintEqualToAnchor:mode_switch_.trailingAnchor
+    [tab_scroll_.leadingAnchor constraintEqualToAnchor:menu_button_.trailingAnchor
                                               constant:padding * 2.0f],
     [tab_scroll_.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-padding],
     [tab_scroll_.centerYAnchor constraintEqualToAnchor:menu_button_.centerYAnchor],
@@ -202,7 +185,6 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
 - (void)teardown
 {
   menu_button_.menu = nil;
-  [mode_switch_ removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
   for (UIButton *button in tool_buttons_) {
     [button removeTarget:self action:nil forControlEvents:UIControlEventAllEvents];
   }
@@ -222,7 +204,6 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
 {
   [header_ release];
   [menu_button_ release];
-  [mode_switch_ release];
   [tab_scroll_ release];
   [tab_stack_ release];
   [dock_ release];
@@ -293,17 +274,8 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Mode switch and workspace tabs
+/** \name Workspace tabs
  * \{ */
-
-- (void)handleModeSwitch:(UISegmentedControl *)sender
-{
-  char command[GHOST_IOS_COMMAND_MAX];
-  if (GHOST_IOSModeSwitch_command(int(sender.selectedSegmentIndex), command)) {
-    GHOST_IOSStyle_selectionFeedback();
-    [self queue:command];
-  }
-}
 
 - (void)handleTab:(UIButton *)sender
 {
@@ -437,12 +409,10 @@ static UIView *GHOST_IOSHeaderDock_bar(UIView *host, NSString *identifier)
     [self rebuildTabs:context];
   }
 
-  /* The mode switch and the dock follow the 3D Viewport; elsewhere they keep their state. */
-  if (!GHOST_IOSModeSwitch_enabled(context)) {
+  /* The dock follows the 3D Viewport; elsewhere it keeps its tools. */
+  if (context.editor != GHOST_IOSEditor::View3D) {
     return;
   }
-  const int segment = GHOST_IOSModeSwitch_selected(context);
-  mode_switch_.selectedSegmentIndex = segment >= 0 ? segment : UISegmentedControlNoSegment;
 
   int count = 0;
   const GHOST_IOSToolItem *tools = GHOST_IOSDock_tools(context, &count);

@@ -105,7 +105,6 @@ On iPad, a strip along the top replaces Blender's top bar:
 
 - **Menu button**: Blender's File, Edit, Render, Window, and Help menus, plus
   the menus for the editor and mode under the cursor.
-- **Object / Edit / Sculpt**: switches the active object's mode.
 - **Workspace tabs**: scroll sideways to see them all. The active workspace is
   highlighted.
 

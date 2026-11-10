@@ -73,29 +73,6 @@ def run_harness(test: unittest.TestCase, body: str) -> None:
 
 
 class HeaderTableTests(unittest.TestCase):
-    def test_mode_switch_follows_and_sets_the_mode(self) -> None:
-        run_harness(
-            self,
-            """
-            const auto V = GHOST_IOSEditor::View3D;
-            CHECK(GHOST_IOSModeSwitch_selected(context(V, GHOST_IOSMode::Object)) == 0);
-            CHECK(GHOST_IOSModeSwitch_selected(context(V, GHOST_IOSMode::Edit)) == 1);
-            CHECK(GHOST_IOSModeSwitch_selected(context(V, GHOST_IOSMode::Sculpt)) == 2);
-            CHECK(GHOST_IOSModeSwitch_selected(context(V, GHOST_IOSMode::Paint)) == -1);
-            CHECK(GHOST_IOSModeSwitch_enabled(context(V, GHOST_IOSMode::Object)));
-            CHECK(!GHOST_IOSModeSwitch_enabled(
-                context(GHOST_IOSEditor::Node, GHOST_IOSMode::Other)));
-
-            char command[GHOST_IOS_COMMAND_MAX];
-            CHECK(GHOST_IOSModeSwitch_command(1, command));
-            CHECK(std::strcmp(command, "object.mode_set\\nmode=EDIT") == 0);
-            CHECK(GHOST_IOSModeSwitch_command(2, command));
-            CHECK(std::strcmp(command, "object.mode_set\\nmode=SCULPT") == 0);
-            CHECK(!GHOST_IOSModeSwitch_command(3, command) && command[0] == '\\0');
-            CHECK(!GHOST_IOSModeSwitch_command(-1, command));
-            """,
-        )
-
     def test_workspace_tabs_switch_by_name_and_compare_in_context(self) -> None:
         run_harness(
             self,
@@ -187,11 +164,16 @@ class HeaderDockSourceTests(unittest.TestCase):
         for name in ("GHOST_IOSChrome.hh", "GHOST_IOSHeaderDock.hh", "GHOST_IOSHeaderDock.mm"):
             self.assertIn(f"intern/{name}", cmake)
 
-    def test_header_has_one_menu_button_a_mode_switch_and_scrolling_tabs(self) -> None:
+    def test_header_has_one_menu_button_and_scrolling_tabs(self) -> None:
         self.assertIn("menu_button_.showsMenuAsPrimaryAction = YES;", self.views)
         self.assertIn("UIDeferredMenuElement", self.views)
         self.assertIn("GHOST_IOSMenuBar_topMenus(", self.views)
-        self.assertIn("UISegmentedControl alloc", self.views)
+        # No mode switch: the 3D Viewport's own mode menu already does this (design review).
+        self.assertNotIn("UISegmentedControl", self.views)
+        self.assertNotIn("GHOST_IOSModeSwitch", CHROME.read_text())
+        tabs = self.views[self.views.index("[tab_scroll_.leadingAnchor") :]
+        tabs = tabs[: tabs.index("],")]
+        self.assertIn("menu_button_.trailingAnchor", tabs)
         self.assertIn("tab_scroll_.showsHorizontalScrollIndicator = NO;", self.views)
         self.assertIn("scrollRectToVisible:", self.views)
         self.assertIn("[host_ setCanvasInsetsTop:GHOST_IOS_HEADER_HEIGHT bottom:GHOST_IOS_DOCK_HEIGHT];",

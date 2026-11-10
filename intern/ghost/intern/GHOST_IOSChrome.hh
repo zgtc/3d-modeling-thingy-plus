@@ -6,8 +6,8 @@
  * \ingroup GHOST
  * Platform-neutral contents of the iPad's native header and tool dock.
  *
- * The header replaces Blender's top bar with one menu button, an Object / Edit / Sculpt mode
- * switch and a scrollable strip of workspace tabs. The tool dock along the bottom, and the Tools
+ * The header replaces Blender's top bar with one menu button and a scrollable strip of workspace
+ * tabs; the mode stays in the 3D Viewport's own mode menu. The tool dock along the bottom, and the Tools
  * page of the Pencil squeeze palette, replace the tool shelf on the left of the viewport. Every
  * control queues an operator call, so tools, modes and workspaces are Blender's own.
  */
@@ -18,53 +18,6 @@
 #include "GHOST_IOSTouchKeys.hh"
 
 #include <cstring>
-
-/* -------------------------------------------------------------------- */
-/** \name Mode switch
- * \{ */
-
-struct GHOST_IOSModeSegment {
-  const char *title;
-  /** `object.mode_set` mode. */
-  const char *mode;
-  GHOST_IOSMode context_mode;
-};
-
-inline constexpr GHOST_IOSModeSegment GHOST_IOS_MODE_SEGMENTS[] = {
-    {"Object", "OBJECT", GHOST_IOSMode::Object},
-    {"Edit", "EDIT", GHOST_IOSMode::Edit},
-    {"Sculpt", "SCULPT", GHOST_IOSMode::Sculpt},
-};
-constexpr int GHOST_IOS_MODE_SEGMENT_COUNT = 3;
-
-/** The segment to show selected, or -1 in other modes such as paint. */
-inline int GHOST_IOSModeSwitch_selected(const GHOST_IOSInteractionContext &context)
-{
-  for (int i = 0; i < GHOST_IOS_MODE_SEGMENT_COUNT; i++) {
-    if (GHOST_IOS_MODE_SEGMENTS[i].context_mode == context.mode) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-/** Whether the mode switch applies: it acts on the object in a 3D Viewport. */
-inline bool GHOST_IOSModeSwitch_enabled(const GHOST_IOSInteractionContext &context)
-{
-  return context.editor == GHOST_IOSEditor::View3D;
-}
-
-inline bool GHOST_IOSModeSwitch_command(const int segment, char command[GHOST_IOS_COMMAND_MAX])
-{
-  if (segment < 0 || segment >= GHOST_IOS_MODE_SEGMENT_COUNT) {
-    command[0] = '\0';
-    return false;
-  }
-  return GHOST_IOSCommand_format(
-      command, "object.mode_set", "mode", GHOST_IOS_MODE_SEGMENTS[segment].mode);
-}
-
-/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name Workspace tabs
