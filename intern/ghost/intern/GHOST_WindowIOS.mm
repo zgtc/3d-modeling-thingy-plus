@@ -1539,7 +1539,7 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
     timeline_button.hidden = YES;
     return;
   }
-  const CGFloat size = 28.0f;
+  const CGFloat size = 44.0f;
   const CGFloat right = context.timeline_right / scale;
   const CGFloat middle = (context.timeline_header_top + context.timeline_header_bottom) * 0.5 /
                          scale;

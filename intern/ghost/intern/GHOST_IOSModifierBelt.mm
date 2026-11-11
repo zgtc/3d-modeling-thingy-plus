@@ -36,10 +36,10 @@ static constexpr CGFloat belt_padding = 4.0f;
 static constexpr CGFloat handle_size = GHOST_IOS_CONTROL_SIZE;
 static constexpr CGFloat key_width = 58.0f;
 static constexpr CGFloat command_key_width = 44.0f;
-static constexpr CGFloat command_key_height = 40.0f;
+static constexpr CGFloat command_key_height = 44.0f;
 static constexpr CGFloat tool_size = GHOST_IOS_CONTROL_SIZE;
 static constexpr CGFloat pad_key_width = 52.0f;
-static constexpr CGFloat pad_key_height = 40.0f;
+static constexpr CGFloat pad_key_height = 44.0f;
 static constexpr CGFloat pad_gap = 8.0f;
 
 struct GHOST_IOSModifierKeyInfo {
