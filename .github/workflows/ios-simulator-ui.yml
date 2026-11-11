@@ -1,0 +1,411 @@
+name: iOS simulator UI
+
+# Builds an arm64 iOS Simulator Blender.app for each feature PR and drives the
+# live app with the repository's simulator harnesses. The device IPA from
+# ios-pr-preview.yml cannot run in the Simulator, so this lane has its own
+# simulator-SDK dependency prefix and compiler cache.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-simulator-ui-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-drive-simulator:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       (startsWith(github.head_ref, 'story/') ||
+        startsWith(github.head_ref, 'feat/') ||
+        startsWith(github.head_ref, 'refactor/')))
+    runs-on: macos-15
+    timeout-minutes: 360
+    env:
+      XCODE_PATH: /Applications/Xcode_26.3.app/Contents/Developer
+      CI_ROOT: ${{ github.workspace }}/.ios-sim
+      DEPS_BUILD: ${{ github.workspace }}/.ios-sim/deps-build
+      DEPS_INSTALL: ${{ github.workspace }}/.ios-sim/deps-install
+      DEPS_DOWNLOADS: ${{ github.workspace }}/.ios-sim/downloads
+      DEPS_PACKAGES: ${{ github.workspace }}/.ios-sim/packages
+      HOST_BUILD: ${{ github.workspace }}/.ios-sim/host-build
+      HOST_INSTALL: ${{ github.workspace }}/.ios-sim/host-install
+      APP_BUILD: ${{ github.workspace }}/.ios-sim/app-build
+      UI_RESULTS: ${{ github.workspace }}/.ios-sim/ui-results
+      CCACHE_DIR: ${{ github.workspace }}/.ios-sim/ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_NOHASHDIR: 'true'
+      CCACHE_COMPRESS: 'true'
+      CCACHE_MAXSIZE: 4G
+      # Matches the owner's test iPad so layout checks see the same geometry.
+      SIM_DEVICE_NAME: iPad Air 11-inch (M3)
+      GIT_LFS_SKIP_SMUDGE: '1'
+
+    steps:
+      - name: Check out PR source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - name: Hydrate required LFS files from public Blender upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git lfs install --local
+          git remote add blender-lfs https://projects.blender.org/blender/blender.git
+          git config remote.blender-lfs.lfsurl https://projects.blender.org/blender/blender.git/info/lfs
+          git lfs pull blender-lfs \
+            --include="assets/**,release/datafiles/**,release/ios/**,scripts/**" \
+            --exclude=""
+          python3 - <<'PY'
+          from pathlib import Path
+
+          roots = (Path("assets"), Path("release/datafiles"), Path("release/ios"), Path("scripts"))
+          for root in roots:
+              if not root.exists():
+                  continue
+              for path in root.rglob("*"):
+                  if path.is_file():
+                      with path.open("rb") as handle:
+                          if handle.read(42) == b"version https://git-lfs.github.com/spec/v1":
+                              raise SystemExit(f"unhydrated LFS pointer: {path}")
+          PY
+
+      - name: Select the public runner toolchain
+        run: |
+          sudo xcode-select --switch "$XCODE_PATH"
+          xcodebuild -downloadComponent MetalToolchain
+          metal_toolchain="$(xcodebuild -showComponent MetalToolchain | awk -F': ' '/Toolchain Identifier/ { print $2 }')"
+          test -n "$metal_toolchain"
+          echo "TOOLCHAINS=$metal_toolchain" >> "$GITHUB_ENV"
+          TOOLCHAINS="$metal_toolchain" xcrun --sdk iphonesimulator metal -v
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: Select Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install dependency build tools
+        run: |
+          brew install autoconf automake bison ccache dos2unix flex libtool meson ninja pkgconf yasm
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix libtool)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Compute content-addressed cache keys
+        id: cache-keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcode_key="$(xcodebuild -version | shasum -a 256 | cut -d' ' -f1)"
+          dependency_key="$(
+            git ls-files \
+              build_files/build_environment \
+              build_files/ios/build_environment \
+              build_files/cmake/config/blender_full.cmake \
+              build_files/cmake/config/blender_ios_sim.cmake \
+              build_files/cmake/config/blender_ios_features.cmake \
+              build_files/ios/package_python_frameworks.py \
+              | LC_ALL=C sort \
+              | xargs shasum -a 256 \
+              | shasum -a 256 \
+              | cut -d' ' -f1
+          )"
+          # Same inputs and key as ios-pr-preview.yml: host tools are macOS
+          # binaries and do not depend on the iOS SDK.
+          host_key="$(
+            git ls-files \
+              build_files/cmake/host_tool_features.cmake \
+              build_files/cmake/config/blender_full.cmake \
+              build_files/cmake/config/blender_ios_host_tools.cmake \
+              build_files/cmake/config/blender_ios_features.cmake \
+              build_files/ios/bundle_host_tool_runtime.py \
+              source/blender/blentranslation/msgfmt \
+              source/blender/datatoc \
+              source/blender/gpu/shader_tool \
+              source/blender/makesdna \
+              source/blender/makesrna \
+              | LC_ALL=C sort \
+              | xargs shasum -a 256 \
+              | shasum -a 256 \
+              | cut -d' ' -f1
+          )"
+          library_revision="$(git rev-parse HEAD:lib/macos_arm64)"
+          {
+            echo "xcode-cache-key=$xcode_key"
+            echo "dependency-cache-key=ios-simulator-deps-v1-${xcode_key}-${dependency_key}"
+            echo "host-tool-cache-key=ios-host-tools-v2-${xcode_key}-${library_revision}-${host_key}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore iOS Simulator dependency prefix
+        id: dependency-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ env.DEPS_INSTALL }}
+            ${{ env.DEPS_BUILD }}/Release
+          key: ${{ steps.cache-keys.outputs.dependency-cache-key }}
+
+      - name: Restore revision-matched native tools
+        id: host-tool-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.HOST_INSTALL }}
+          key: ${{ steps.cache-keys.outputs.host-tool-cache-key }}
+
+      - name: Restore simulator compiler cache
+        id: app-compiler-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ios-simulator-ccache-v1-${{ steps.cache-keys.outputs.xcode-cache-key }}-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            ios-simulator-ccache-v1-${{ steps.cache-keys.outputs.xcode-cache-key }}-
+
+      - name: Build and harvest iOS Simulator dependencies on cache miss
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEPS_BUILD" "$DEPS_INSTALL" "$DEPS_DOWNLOADS" "$DEPS_PACKAGES"
+          # The blender-v5.2-release lib-source mirror returns an HTTP error for
+          # this archive, so seed it from the upstream URI in versions.cmake and
+          # check it against the pinned SHA-256 before the dependency build runs.
+          brotli="$DEPS_PACKAGES/brotli-v1.0.9.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$brotli" https://github.com/google/brotli/archive/refs/tags/v1.0.9.tar.gz
+          echo "f9e8d81d0405ba66d181529af42a3354f838c939095ff99930da6aa9cdf6fe46  $brotli" | shasum -a 256 -c -
+          sdk_path="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          build_python="$(command -v python3.13)"
+          cmake \
+            -S build_files/ios/build_environment \
+            -B "$DEPS_BUILD" \
+            -G Ninja \
+            -DAPPLE_TARGET_DEVICE=ios-simulator \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT="$sdk_path" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DBLENDER_IOS_BUILD_PYTHON="$build_python" \
+            -DPACKAGE_USE_UPSTREAM_SOURCES=OFF \
+            "-DBLENDER_DEPENDENCY_DOWNLOADS=ZLIB;PNG;JPEG;OPENEXR;OPENSUBDIV;FREETYPE;OPENCOLORIO;MINIZIPNG;OPENIMAGEIO;TIFF;PYTHON;TBB;ZSTANDARD;NUMPY;OPENJPEG;WEBP;YAMLCPP;EXPAT;PUGIXML;BZIP2;FFI;LZMA;SSL;SQLITE;ZSTD;BROTLI;FMT;ROBINMAP;IMATH;PYSTRING;DEFLATE;OPENJPH;EIGEN;OPENAL;BLOSC;ALEMBIC;OIDN;OPENVDB;FFTW;SNDFILE;FLAC;OGG;VORBIS;THEORA;VPX;OPUS;LAME;FFMPEG;GMP;HARU;MANIFOLD;RUBBERBAND;MATERIALX;ABSEIL;CERES;DRACO;MESHOPTIMIZER;POTRACE;EMBREE;OPENPGL;USD" \
+            -DDOWNLOAD_DIR="$DEPS_DOWNLOADS" \
+            -DPACKAGE_DIR="$DEPS_PACKAGES" \
+            -DHARVEST_TARGET="$DEPS_INSTALL" \
+            -DMAKE_THREADS=3
+          cmake --build "$DEPS_BUILD" --parallel 3 --target \
+            external_alembic \
+            external_ceres \
+            external_draco \
+            external_embree \
+            external_eigen \
+            external_fftw \
+            external_ffmpeg \
+            external_freetype \
+            external_gmp \
+            external_haru \
+            external_manifold \
+            external_materialx \
+            external_meshoptimizer \
+            external_numpy \
+            external_openal \
+            external_openimagedenoise \
+            external_openimageio \
+            external_opensubdiv \
+            external_openpgl \
+            external_openvdb \
+            external_potrace \
+            external_rubberband \
+            external_sndfile \
+            external_tbb \
+            external_usd \
+            external_zstandard
+
+      - name: Audit iOS Simulator dependency prefix
+        shell: bash
+        env:
+          DEPENDENCY_CACHE_HIT: ${{ steps.dependency-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          for file in \
+            "$DEPS_INSTALL/python/Python.framework/Python" \
+            "$DEPS_INSTALL/python/lib/python3.13/site-packages/numpy/_core/include/numpy/arrayobject.h" \
+            "$DEPS_INSTALL/python/lib/python3.13/site-packages/zstandard/backend_c.cpython-313-iphonesimulator.so" \
+            "$DEPS_INSTALL/openimageio/lib/cmake/OpenImageIO/OpenImageIOConfig.cmake" \
+            "$DEPS_INSTALL/opencolorio/lib/cmake/OpenColorIO/OpenColorIOConfig.cmake" \
+            "$DEPS_INSTALL/opensubdiv/include/opensubdiv/version.h" \
+            "$DEPS_INSTALL/tbb/lib/cmake/TBB/TBBConfig.cmake" \
+            "$DEPS_BUILD/Release/png/lib/libpng.a" \
+            "$DEPS_BUILD/Release/zlib/lib/libz.a" \
+            "$DEPS_BUILD/Release/usd/lib/libusd_m.a"; do
+            test -s "$file" || { echo "::error::Missing or empty dependency file: $file"; exit 1; }
+          done
+          if [[ "$DEPENDENCY_CACHE_HIT" != "true" ]]; then
+            python3 build_files/ios/audit.py abi "$DEPS_BUILD/Release" --target ios-simulator --arch arm64
+          else
+            echo "Dependency cache was ABI-audited before it was saved; skipping duplicate scan."
+          fi
+
+      - name: Save iOS Simulator dependency prefix
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ env.DEPS_INSTALL }}
+            ${{ env.DEPS_BUILD }}/Release
+          key: ${{ steps.cache-keys.outputs.dependency-cache-key }}
+
+      - name: Build revision-matched native tools on cache miss
+        if: steps.host-tool-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c submodule.lib/macos_arm64.update=checkout \
+            submodule update --init --depth 1 lib/macos_arm64
+          test "$(git -C lib/macos_arm64 rev-parse --show-toplevel)" = "$(pwd)/lib/macos_arm64"
+          git -C lib/macos_arm64 lfs pull origin
+          cmake \
+            -S . \
+            -B "$HOST_BUILD" \
+            -G Ninja \
+            -C build_files/cmake/config/blender_ios_host_tools.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64
+          cmake --build "$HOST_BUILD" --parallel 3 --target \
+            makesdna makesrna datatoc msgfmt shader_tool
+          mkdir -p "$HOST_INSTALL"
+          for tool in makesdna makesrna makesrna.features datatoc msgfmt shader_tool; do
+            cp "$HOST_BUILD/bin/$tool" "$HOST_INSTALL/$tool"
+          done
+          python3 build_files/ios/bundle_host_tool_runtime.py \
+            --library-root lib/macos_arm64 \
+            --destination "$HOST_INSTALL/lib" \
+            "$HOST_INSTALL/makesdna" \
+            "$HOST_INSTALL/makesrna" \
+            "$HOST_INSTALL/datatoc" \
+            "$HOST_INSTALL/msgfmt" \
+            "$HOST_INSTALL/shader_tool"
+
+      - name: Save revision-matched native tools
+        if: steps.host-tool-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.HOST_INSTALL }}
+          key: ${{ steps.cache-keys.outputs.host-tool-cache-key }}
+
+      - name: Configure and build simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DYLD_LIBRARY_PATH="$HOST_INSTALL/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+          sdk_path="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          build_jobs="$(sysctl -n hw.logicalcpu)"
+          ccache --zero-stats
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          cmake \
+            -S . \
+            -B "$APP_BUILD" \
+            -G Ninja \
+            -C build_files/cmake/config/blender_ios_sim.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT="$sdk_path" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DIOS_HOST_TOOLS_DIR="$HOST_INSTALL" \
+            -DLIBDIR="$DEPS_BUILD/Release"
+          cmake --build "$APP_BUILD" --parallel "$build_jobs" --target install
+          ccache --show-stats
+          python3 build_files/ios/audit_build_features.py \
+            "$APP_BUILD/bin/Blender.app/Blender" \
+            --require-opensubdiv
+
+      - name: Save simulator compiler cache
+        if: success() && steps.app-compiler-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ios-simulator-ccache-v1-${{ steps.cache-keys.outputs.xcode-cache-key }}-${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Blender-simulator-app
+          path: ${{ env.APP_BUILD }}/bin/Blender.app
+          retention-days: 7
+
+      - name: Boot the test iPad simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl list devicetypes
+          udid="$(python3 - <<'PY'
+          import json, os, subprocess
+
+          def simctl(*args):
+              return json.loads(subprocess.run(["xcrun", "simctl", "list", *args, "--json"],
+                                               check=True, capture_output=True, text=True).stdout)
+
+          wanted = os.environ["SIM_DEVICE_NAME"]
+          types = simctl("devicetypes")["devicetypes"]
+          kind = next((t for t in types if t["name"] == wanted), None)
+          if kind is None:
+              raise SystemExit(f"device type {wanted!r} is not installed on this runner")
+          runtime = next(r for r in reversed(simctl("runtimes")["runtimes"])
+                         if r["isAvailable"] and r["platform"] == "iOS")
+          print(subprocess.run(["xcrun", "simctl", "create", "Blender UI", kind["identifier"],
+                                runtime["identifier"]],
+                               check=True, capture_output=True, text=True).stdout.strip())
+          PY
+          )"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+
+      - name: Drive the live app with real touch and mouse input
+        shell: bash
+        env:
+          SIM_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$UI_RESULTS"
+          python3 build_files/ios/simulator_hardware_input.py \
+            --app "$APP_BUILD/bin/Blender.app" \
+            --device "$SIM_UDID" \
+            --output "$UI_RESULTS/hardware-input" \
+            --case touch \
+            --case click \
+            --case sidebar \
+            --fixture cube \
+            --record
+          xcrun simctl io "$SIM_UDID" screenshot "$UI_RESULTS/final.png"
+
+      - name: Upload UI results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-ui-results
+          path: ${{ env.UI_RESULTS }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Shut down the test simulator
+        if: always() && steps.simulator.outputs.udid != ''
+        run: |
+          xcrun simctl shutdown "${{ steps.simulator.outputs.udid }}" || true
+          xcrun simctl delete "${{ steps.simulator.outputs.udid }}" || true
