@@ -178,6 +178,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$DEPS_BUILD" "$DEPS_INSTALL" "$DEPS_DOWNLOADS" "$DEPS_PACKAGES"
+          # The blender-v5.2-release lib-source mirror returns an HTTP error for
+          # this archive, so seed it from the upstream URI in versions.cmake and
+          # check it against the pinned SHA-256 before the dependency build runs.
+          brotli="$DEPS_PACKAGES/brotli-v1.0.9.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$brotli" https://github.com/google/brotli/archive/refs/tags/v1.0.9.tar.gz
+          echo "f9e8d81d0405ba66d181529af42a3354f838c939095ff99930da6aa9cdf6fe46  $brotli" | shasum -a 256 -c -
           sdk_path="$(xcrun --sdk iphonesimulator --show-sdk-path)"
           build_python="$(command -v python3.13)"
           cmake \
