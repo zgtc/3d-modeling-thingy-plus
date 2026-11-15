@@ -19,9 +19,9 @@ import sys
 from typing import Sequence
 
 
-BULK_VOLUME = Path("/Volumes/BlenderBuild")
-BULK_ROOT = BULK_VOLUME / "blender-ios"
-EXPECTED_VOLUME_UUID = "EC4DA5DD-B2A4-4056-934E-5B703096BEF1"
+BULK_VOLUME = Path("/Volumes/Untitled")
+BULK_ROOT = BULK_VOLUME / "Dev" / "BlenderBuild" / "blender-ios"
+EXPECTED_VOLUME_UUID = "44321BFF-A9F3-485C-B34D-2B07CD74E059"
 BASELINE_SHA = "fbe6228777e7d9afefcd61a413844e790ae75db7"
 DONOR_SHA = "a1de44dd54af75a4c8c4a29a5fed2a1334a87446"
 MINIMUM_BULK_FREE_GIB = 100

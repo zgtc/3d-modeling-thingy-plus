@@ -18,7 +18,7 @@ import sys
 from typing import Sequence
 
 
-CANONICAL_BULK_ROOT = Path("/Volumes/BlenderBuild/blender-ios")
+CANONICAL_BULK_ROOT = Path("/Volumes/Untitled/Dev/BlenderBuild/blender-ios")
 SIGNING_OVERRIDES = (
     "CODE_SIGNING_ALLOWED=NO",
     "CODE_SIGNING_REQUIRED=NO",
