@@ -305,8 +305,14 @@ class GHOST_IOSVirtualPointer::Impl {
     int32_t x = int32_t(std::lround(state_.x()));
     int32_t y = int32_t(std::lround(state_.y()));
     constrainCursorForEvent(x, y);
+    /* GHOST cursor events carry screen coordinates, and Blender converts them back with
+     * #GHOST_IWindow::screenToClient. The canvas can be inset where the command bar sits, so
+     * sending client coordinates shifted every position by the inset. */
+    int32_t screen_x = 0;
+    int32_t screen_y = 0;
+    window_->clientToScreen(x, y, screen_x, screen_y);
     system_->pushEvent(std::make_unique<GHOST_EventCursor>(
-        system_->getMilliSeconds(), GHOST_kEventCursorMove, window_, x, y, tablet));
+        system_->getMilliSeconds(), GHOST_kEventCursorMove, window_, screen_x, screen_y, tablet));
     updateCursorLayer();
   }
 

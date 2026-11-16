@@ -21,9 +21,9 @@ import sys
 from typing import Mapping, Sequence
 
 
-CANONICAL_VOLUME = Path("/Volumes/BlenderBuild")
-CANONICAL_BULK = CANONICAL_VOLUME / "blender-ios"
-EXPECTED_VOLUME_UUID = "EC4DA5DD-B2A4-4056-934E-5B703096BEF1"
+CANONICAL_VOLUME = Path("/Volumes/Untitled")
+CANONICAL_BULK = CANONICAL_VOLUME / "Dev" / "BlenderBuild" / "blender-ios"
+EXPECTED_VOLUME_UUID = "44321BFF-A9F3-485C-B34D-2B07CD74E059"
 DONOR_SHA = "a1de44dd54af75a4c8c4a29a5fed2a1334a87446"
 TOOL_PATHS = (
     "/opt/homebrew/opt/bison/bin",
