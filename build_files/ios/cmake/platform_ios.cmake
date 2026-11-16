@@ -354,7 +354,7 @@ if(WITH_APPLE_CROSSPLATFORM)
     set(CMAKE_CXX_ARCHIVE_FINISH "<CMAKE_RANLIB> -no_warning_for_no_symbols -c <TARGET>")
   endif()
 
-  set(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.blenderfoundation.blender.ios")
+  set(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.eightvine.blender")
   message(STATUS "Using iOS dependency sysroot: ${LIBDIR}")
   message(STATUS "Using iOS host tools: ${IOS_HOST_TOOLS_DIR}")
   return()

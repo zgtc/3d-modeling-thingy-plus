@@ -125,9 +125,6 @@ else()
   harvest(external_materialx materialx/resources materialx/resources "README.md")
 endif()
 
-add_dependencies(
-  external_materialx
-)
 
 if(NOT WITH_APPLE_CROSSPLATFORM)
   add_dependencies(external_materialx external_python external_pybind11)

@@ -20,7 +20,7 @@
     </dict>
   </array>
   <key>CFBundleIdentifier</key>
-  <string>org.blenderfoundation.blender.ios</string>
+  <string>com.eightvine.blender</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
