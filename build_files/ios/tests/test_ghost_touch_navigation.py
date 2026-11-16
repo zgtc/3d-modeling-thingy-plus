@@ -47,7 +47,7 @@ class GhostTouchNavigationTests(unittest.TestCase):
             source.rindex("- (void)handlePan3f:"): source.rindex("- (void)handlePointerScroll:")
         ]
         pinch = source[
-            source.rindex("- (void)handleZoom:"): source.rindex("- (void)pencilInteractionDidTap:")
+            source.rindex("- (void)handleZoom:"): source.index("- (void)pencilInteraction:", source.rindex("- (void)handleZoom:"))
         ]
         for handler in (two_finger, three_finger, pinch):
             self.assertIn("[self getVirtualPointerPoint]", handler)

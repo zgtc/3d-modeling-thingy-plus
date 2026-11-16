@@ -22,8 +22,16 @@ class GhostUndoRedoGestureTests(unittest.TestCase):
             self.source.rindex("- (void)handleTap3F:"):
             self.source.rindex("- (void)handleTap4F:")
         ]
-        self.assertIn("generateUndoRedoShortcut:false", undo_handler)
-        self.assertIn("generateUndoRedoShortcut:true", redo_handler)
+        self.assertIn("[self runTapGesture:0]", undo_handler)
+        self.assertIn("[self runTapGesture:1]", redo_handler)
+        # Taps are assignable; Undo and Redo still map to the keyboard shortcuts.
+        dispatch = self.source[self.source.index("- (void)runTapGesture:") :]
+        undo = dispatch[dispatch.index("case GHOST_IOSGestureAction::Undo:") :]
+        self.assertTrue(undo.split("break;")[0].strip().endswith(
+            "[self generateUndoRedoShortcut:false];"))
+        redo = dispatch[dispatch.index("case GHOST_IOSGestureAction::Redo:") :]
+        self.assertTrue(redo.split("break;")[0].strip().endswith(
+            "[self generateUndoRedoShortcut:true];"))
 
     def test_shortcut_helper_preserves_keyboard_undo_and_redo(self) -> None:
         shortcut = self.source[

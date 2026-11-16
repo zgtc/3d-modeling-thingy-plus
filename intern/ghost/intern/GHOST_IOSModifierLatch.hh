@@ -101,6 +101,17 @@ class GHOST_IOSModifierLatch {
     }
   }
 
+  /**
+   * Lock the key, or turn a locked key off, without a touch on it. Used by native controls
+   * such as the Pencil palette's Invert slot.
+   */
+  void toggleLock(const GHOST_IOSModifier modifier)
+  {
+    Key &key = key_(modifier);
+    key.mode = key.mode == GHOST_IOSModifierMode::Locked ? GHOST_IOSModifierMode::Off :
+                                                           GHOST_IOSModifierMode::Locked;
+  }
+
   /** Call before a pointer button press reaches Blender. */
   void pointerPressed()
   {
