@@ -775,13 +775,10 @@ GHOST_TSuccess GHOST_SystemIOS::handleWindowEvent(GHOST_TEventType eventType,
         window->updateDrawingContext();
         pushEvent(
             std::make_unique<GHOST_Event>(getMilliSeconds(), GHOST_kEventWindowSize, window));
-        // Mouse up event is trapped by the resizing event loop,
-        // so send it anyway to the window manager.
-        pushEvent(std::make_unique<GHOST_EventButton>(getMilliSeconds(),
-                                                      GHOST_kEventButtonUp,
-                                                      window,
-                                                      GHOST_kButtonMaskLeft,
-                                                      GHOST_TABLET_DATA_NONE));
+        /* Cocoa traps the mouse-up of a live resize and sends one anyway. iOS has no such
+         * loop, and an unconditional button-up lands on whatever is under the pointer, like the
+         * splash link when the canvas is inset after launch. Release only held buttons. */
+        virtual_pointer_->clearButtons();
       }
       break;
     case GHOST_kEventNativeResolutionChange:

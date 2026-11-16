@@ -169,7 +169,7 @@ static GHOST_IOSMode wm_ios_object_mode(const Object *object)
 static GHOST_IOSMode wm_ios_mode(const Main &bmain, wmWindow &win, const ScrArea *area)
 {
   if (area->spacetype == SPACE_IMAGE) {
-    const SpaceImage *space = static_cast<const SpaceImage *>(area->spacedata.first);
+    const SpaceImage *space = area->spacedata.first_as<SpaceImage>();
     if (space == nullptr) {
       return GHOST_IOSMode::Other;
     }

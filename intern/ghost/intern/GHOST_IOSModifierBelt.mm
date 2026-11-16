@@ -22,6 +22,7 @@
 #import <os/log.h>
 
 #include "GHOST_IOSModifierBelt.hh"
+#include "GHOST_IOSStyle.hh"
 
 #include <algorithm>
 #include <cstdlib>

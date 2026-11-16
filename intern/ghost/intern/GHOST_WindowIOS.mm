@@ -3074,13 +3074,18 @@ void GHOST_WindowIOS::getWindowBounds(GHOST_Rect &bounds) const
 {
   GHOST_ASSERT(getValid(), "GHOST_WindowIOS::getWindowBounds(): window invalid");
 
+  /* The canvas can be inset where the command bar sits. Report its real position and size so
+   * tablet and Pencil positions do not drift by the inset: a bar on the left moves the canvas
+   * origin, a bar on the right leaves it in place. */
   CGRect window_rect = rootWindow.frame;
   const CGFloat scale = getWindowScaleFactor();
+  const CGSize drawable_size = metal_view_.drawableSize;
+  const CGPoint canvas_origin = metal_view_.frame.origin;
 
-  bounds.b_ = CGRectGetMaxY(window_rect) * scale;
-  bounds.l_ = CGRectGetMinX(window_rect) * scale;
-  bounds.r_ = CGRectGetMaxX(window_rect) * scale;
-  bounds.t_ = CGRectGetMinY(window_rect) * scale;
+  bounds.l_ = (CGRectGetMinX(window_rect) + canvas_origin.x) * scale;
+  bounds.t_ = (CGRectGetMinY(window_rect) + canvas_origin.y) * scale;
+  bounds.r_ = bounds.l_ + std::lround(drawable_size.width);
+  bounds.b_ = bounds.t_ + std::lround(drawable_size.height);
 }
 
 void GHOST_WindowIOS::getClientBounds(GHOST_Rect &bounds) const
