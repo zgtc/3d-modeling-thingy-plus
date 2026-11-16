@@ -83,6 +83,16 @@ struct GHOST_IOSTouchSettings {
       GHOST_IOSGestureAction::Redo,
       GHOST_IOSGestureAction::Search,
   };
+  /**
+   * Squeeze palette slots the user changed, as indices into #GHOST_IOS_PALETTE_CATALOG, per
+   * mode (Object, Edit, Sculpt, Paint). -1 keeps the built-in slot.
+   */
+  int8_t palette_layout[GHOST_IOS_PALETTE_MODE_COUNT][GHOST_IOS_PALETTE_LAYOUT_SLOTS] = {
+      {-1, -1, -1, -1, -1, -1, -1, -1},
+      {-1, -1, -1, -1, -1, -1, -1, -1},
+      {-1, -1, -1, -1, -1, -1, -1, -1},
+      {-1, -1, -1, -1, -1, -1, -1, -1},
+  };
 };
 
 inline GHOST_IOSDoubleTapChoice GHOST_IOSDoubleTapChoice_fromStored(const long value)

@@ -355,6 +355,11 @@ static os_log_t GHOST_IOSPencilPaletteLog()
 /** \name Settings
  * \{ */
 
+static NSString *GHOST_IOSPaletteLayoutKey(const int mode_index)
+{
+  return [NSString stringWithFormat:@"GHOST_IOSPaletteLayout%d", mode_index];
+}
+
 GHOST_IOSTouchSettings GHOST_IOSTouchSettings_load()
 {
   NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
@@ -373,6 +378,15 @@ GHOST_IOSTouchSettings GHOST_IOSTouchSettings_load()
           [defaults integerForKey:GHOST_IOSTapGestureKeys[i]], settings.tap_gestures[i]);
     }
   }
+  for (int m = 0; m < GHOST_IOS_PALETTE_MODE_COUNT; m++) {
+    NSArray *stored = [defaults arrayForKey:GHOST_IOSPaletteLayoutKey(m)];
+    for (int i = 0; i < GHOST_IOS_PALETTE_LAYOUT_SLOTS && i < int(stored.count); i++) {
+      const NSInteger choice = [stored[i] integerValue];
+      settings.palette_layout[m][i] = (choice >= 0 && choice < GHOST_IOS_PALETTE_CATALOG_COUNT) ?
+                                          int8_t(choice) :
+                                          int8_t(-1);
+    }
+  }
   return settings;
 }
 
@@ -384,6 +398,13 @@ void GHOST_IOSTouchSettings_save(const GHOST_IOSTouchSettings &settings)
   [defaults setBool:settings.pencil_only_drawing forKey:GHOST_IOSPencilOnlyDrawingKey];
   for (int i = 0; i < GHOST_IOS_TAP_GESTURE_COUNT; i++) {
     [defaults setInteger:NSInteger(settings.tap_gestures[i]) forKey:GHOST_IOSTapGestureKeys[i]];
+  }
+  for (int m = 0; m < GHOST_IOS_PALETTE_MODE_COUNT; m++) {
+    NSMutableArray<NSNumber *> *layout = [NSMutableArray array];
+    for (int i = 0; i < GHOST_IOS_PALETTE_LAYOUT_SLOTS; i++) {
+      [layout addObject:@(settings.palette_layout[m][i])];
+    }
+    [defaults setObject:layout forKey:GHOST_IOSPaletteLayoutKey(m)];
   }
 }
 
@@ -504,6 +525,106 @@ static UIMenu *GHOST_IOSGestureMenu(NSString *title,
                       children:children];
 }
 
+/**
+ * The Squeeze Palette editor: per mode, per slot, the actions that suit the mode. A slot keeps
+ * its built-in action until the user picks another.
+ */
+static UIMenu *GHOST_IOSPaletteMenu(const GHOST_IOSTouchSettings &settings,
+                                    void (^apply)(GHOST_IOSTouchSettings))
+{
+  static const struct {
+    GHOST_IOSMode mode;
+    NSString *title;
+    NSString *symbol;
+  } modes[GHOST_IOS_PALETTE_MODE_COUNT] = {
+      {GHOST_IOSMode::Object, @"Object Mode", @"cube"},
+      {GHOST_IOSMode::Edit, @"Edit Mode", @"square.and.pencil"},
+      {GHOST_IOSMode::Sculpt, @"Sculpt Mode", @"hand.draw"},
+      {GHOST_IOSMode::Paint, @"Paint Modes", @"paintbrush"},
+  };
+
+  NSMutableArray<UIMenuElement *> *mode_menus = [NSMutableArray array];
+  for (int m = 0; m < GHOST_IOS_PALETTE_MODE_COUNT; m++) {
+    GHOST_IOSPaletteSlot current[GHOST_IOS_PALETTE_SLOT_COUNT];
+    GHOST_IOSPalette_resolve(modes[m].mode, settings.palette_layout, current);
+    GHOST_IOSInteractionContext context;
+    context.mode = modes[m].mode;
+    const GHOST_IOSPaletteSlot *defaults = GHOST_IOSPalette_slots(context);
+
+    NSMutableArray<UIMenuElement *> *slot_menus = [NSMutableArray array];
+    for (int i = 0; i < GHOST_IOS_PALETTE_SLOT_COUNT; i++) {
+      NSMutableArray<UIMenuElement *> *choices = [NSMutableArray array];
+
+      GHOST_IOSTouchSettings use_default = settings;
+      use_default.palette_layout[m][i] = -1;
+      UIAction *default_action = [UIAction
+          actionWithTitle:[NSString stringWithFormat:@"Default (%s)", defaults[i].title]
+                    image:GHOST_IOSStyle_symbol(@(defaults[i].symbol), 15.0f)
+               identifier:nil
+                  handler:^(UIAction *) {
+                    apply(use_default);
+                  }];
+      default_action.state = settings.palette_layout[m][i] < 0 ? UIMenuElementStateOn :
+                                                                 UIMenuElementStateOff;
+      [choices addObject:default_action];
+
+      for (int c = 0; c < GHOST_IOS_PALETTE_CATALOG_COUNT; c++) {
+        if ((GHOST_IOS_PALETTE_CATALOG[c].modes & GHOST_IOSPalette_modeBit(m)) == 0) {
+          continue;
+        }
+        GHOST_IOSTouchSettings next = settings;
+        next.palette_layout[m][i] = int8_t(c);
+        UIAction *action = [UIAction
+            actionWithTitle:@(GHOST_IOS_PALETTE_CATALOG[c].slot.title)
+                      image:GHOST_IOSStyle_symbol(@(GHOST_IOS_PALETTE_CATALOG[c].slot.symbol),
+                                                  15.0f)
+                 identifier:nil
+                    handler:^(UIAction *) {
+                      apply(next);
+                    }];
+        action.state = settings.palette_layout[m][i] == c ? UIMenuElementStateOn :
+                                                            UIMenuElementStateOff;
+        [choices addObject:action];
+      }
+      [slot_menus
+          addObject:[UIMenu menuWithTitle:[NSString stringWithFormat:@"Slot %d: %s",
+                                                                     i + 1,
+                                                                     current[i].title]
+                                    image:GHOST_IOSStyle_symbol(@(current[i].symbol), 15.0f)
+                               identifier:nil
+                                  options:0
+                                 children:choices]];
+    }
+
+    GHOST_IOSTouchSettings reset_mode = settings;
+    for (int i = 0; i < GHOST_IOS_PALETTE_SLOT_COUNT; i++) {
+      reset_mode.palette_layout[m][i] = -1;
+    }
+    UIAction *reset_action = [UIAction actionWithTitle:@"Reset to Default"
+                                                 image:GHOST_IOSStyle_symbol(@"arrow.counterclockwise", 15.0f)
+                                            identifier:nil
+                                               handler:^(UIAction *) {
+                                                 apply(reset_mode);
+                                               }];
+    reset_action.attributes = UIMenuElementAttributesDestructive;
+    [slot_menus addObject:[UIMenu menuWithTitle:@""
+                                          image:nil
+                                     identifier:nil
+                                        options:UIMenuOptionsDisplayInline
+                                       children:@[ reset_action ]]];
+    [mode_menus addObject:[UIMenu menuWithTitle:modes[m].title
+                                          image:GHOST_IOSStyle_symbol(modes[m].symbol, 15.0f)
+                                     identifier:nil
+                                        options:0
+                                       children:slot_menus]];
+  }
+  return [UIMenu menuWithTitle:@"Pencil Squeeze Palette"
+                         image:GHOST_IOSStyle_symbol(@"circle.grid.cross", 15.0f)
+                    identifier:nil
+                       options:0
+                      children:mode_menus];
+}
+
 UIMenu *GHOST_IOSTouchSettings_menu(const GHOST_IOSTouchSettings &settings,
                                     void (^changed)(const GHOST_IOSTouchSettings &settings))
 {
@@ -589,7 +710,12 @@ UIMenu *GHOST_IOSTouchSettings_menu(const GHOST_IOSTouchSettings &settings,
                                     GHOST_IOSGestureMenu(@"Three-Finger Tap", 1, settings, apply),
                                     GHOST_IOSGestureMenu(@"Four-Finger Tap", 2, settings, apply),
                                   ]];
-  return [UIMenu menuWithTitle:@"Touch and Pencil" children:@[ pencil, gestures ]];
+  UIMenu *palette = [UIMenu menuWithTitle:@""
+                                    image:nil
+                               identifier:nil
+                                  options:UIMenuOptionsDisplayInline
+                                 children:@[ GHOST_IOSPaletteMenu(settings, apply) ]];
+  return [UIMenu menuWithTitle:@"Touch and Pencil" children:@[ pencil, palette, gestures ]];
 }
 
 /** \} */

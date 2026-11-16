@@ -33,6 +33,11 @@ enum class GHOST_IOSMode : uint8_t {
   Other,
 };
 
+/** Palette layouts are kept for Object, Edit, Sculpt and Paint. #GHOST_IOSMode::Other uses Object. */
+constexpr int GHOST_IOS_PALETTE_MODE_COUNT = 4;
+/** Slots in one palette. Matches #GHOST_IOS_PALETTE_SLOT_COUNT. */
+constexpr int GHOST_IOS_PALETTE_LAYOUT_SLOTS = 8;
+
 constexpr int GHOST_IOS_IDNAME_MAX = 64;
 constexpr int GHOST_IOS_COMMAND_MAX = 256;
 

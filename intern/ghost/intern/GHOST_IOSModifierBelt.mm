@@ -43,7 +43,7 @@ static constexpr CGFloat handle_size = 44.0f;
 static constexpr CGFloat key_width = 58.0f;
 /** The bar is vertical: one key wide. */
 static constexpr CGFloat belt_width = key_width + belt_padding * 2.0f;
-static constexpr CGFloat command_key_height = 36.0f;
+static constexpr CGFloat command_key_height = 40.0f;
 static constexpr CGFloat pad_key_width = 52.0f;
 static constexpr CGFloat pad_key_height = 40.0f;
 static constexpr CGFloat pad_gap = 8.0f;
@@ -270,10 +270,72 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   return [UIColor colorWithWhite:1.0f alpha:GHOST_IOSStyle_hasGlass() ? 0.06f : 0.10f];
 }
 
-/** A key that sends one key stroke when tapped. */
-@interface GHOSTIOSCommandKeyButton : UIButton {
+static NSString *const GHOST_IOSCommandKeyNamesKey = @"GHOST_IOSCommandKeyNames";
+static constexpr NSUInteger GHOST_IOSCommandKeyNameMax = 12;
+
+/** The user's name for a button, or nil to show its default. */
+static NSString *GHOST_IOSCommandKeyCustomName(NSString *key_id)
+{
+  NSDictionary *names = [NSUserDefaults.standardUserDefaults
+      dictionaryForKey:GHOST_IOSCommandKeyNamesKey];
+  NSString *name = names[key_id];
+  return name.length > 0 ? name : nil;
+}
+
+static void GHOST_IOSCommandKeySetCustomName(NSString *key_id, NSString *name)
+{
+  NSMutableDictionary *names = [[[NSUserDefaults.standardUserDefaults
+      dictionaryForKey:GHOST_IOSCommandKeyNamesKey] mutableCopy] autorelease];
+  if (names == nil) {
+    names = [NSMutableDictionary dictionary];
+  }
+  if (name.length > 0) {
+    names[key_id] = name;
+  }
+  else {
+    [names removeObjectForKey:key_id];
+  }
+  [NSUserDefaults.standardUserDefaults setObject:names forKey:GHOST_IOSCommandKeyNamesKey];
+}
+
+/** The key on top and, when there is one, what it does underneath. */
+static NSAttributedString *GHOST_IOSCommandKeyTitle(NSString *key, NSString *name)
+{
+  NSMutableParagraphStyle *paragraph = [[[NSMutableParagraphStyle alloc] init] autorelease];
+  paragraph.alignment = NSTextAlignmentCenter;
+  paragraph.lineBreakMode = NSLineBreakByTruncatingTail;
+  const bool has_name = name.length > 0;
+  NSDictionary *key_attributes = @{
+    NSFontAttributeName : [UIFont systemFontOfSize:has_name ? 13.0f : 14.0f
+                                            weight:UIFontWeightSemibold],
+    NSForegroundColorAttributeName : UIColor.whiteColor,
+    NSParagraphStyleAttributeName : paragraph,
+  };
+  NSMutableAttributedString *text = [[[NSMutableAttributedString alloc]
+      initWithString:key
+          attributes:key_attributes] autorelease];
+  if (has_name) {
+    NSDictionary *name_attributes = @{
+      NSFontAttributeName : [UIFont systemFontOfSize:9.5f weight:UIFontWeightMedium],
+      NSForegroundColorAttributeName : [UIColor colorWithWhite:1.0f alpha:0.72f],
+      NSParagraphStyleAttributeName : paragraph,
+    };
+    [text appendAttributedString:[[[NSAttributedString alloc]
+                                     initWithString:[@"\n" stringByAppendingString:name]
+                                         attributes:name_attributes] autorelease]];
+  }
+  return text;
+}
+
+/** A key that sends one key stroke when tapped. Long press renames what it shows. */
+@interface GHOSTIOSCommandKeyButton : UIButton <UIContextMenuInteractionDelegate> {
   GHOST_IOSKeyStroke stroke_;
   id<GHOSTIOSModifierBeltDelegate> delegate_;
+  /** Stable name for the user's rename: the default title and the stroke it sends. */
+  NSString *key_id_;
+  NSString *default_title_;
+  /** What the key does by default, shown under the key. Nil shows the key alone. */
+  NSString *default_name_;
 }
 + (instancetype)keyWithInfo:(const GHOST_IOSBarKey &)info
                    delegate:(id<GHOSTIOSModifierBeltDelegate>)delegate
@@ -294,13 +356,21 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   GHOSTIOSCommandKeyButton *key = [self buttonWithType:UIButtonTypeCustom];
   key->stroke_ = info.stroke;
   key->delegate_ = delegate;
-  NSString *title = [NSString stringWithUTF8String:info.title];
+  NSString *default_title = [NSString stringWithUTF8String:info.title];
+  key->default_title_ = [default_title retain];
+  key->key_id_ = [[NSString stringWithFormat:@"%s.%d.%d",
+                                             info.title,
+                                             int(info.stroke.key),
+                                             int(info.stroke.modifiers)] retain];
+  key->default_name_ = info.name != nullptr ? [[NSString stringWithUTF8String:info.name] retain] :
+                                              nil;
+  NSString *name = GHOST_IOSCommandKeyCustomName(key->key_id_) ?: key->default_name_;
+  NSString *title = name.length > 0 ? name : default_title;
   key.translatesAutoresizingMaskIntoConstraints = NO;
-  [key setTitle:title forState:UIControlStateNormal];
-  [key setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-  key.titleLabel.font = [UIFont systemFontOfSize:13.0f weight:UIFontWeightSemibold];
-  key.titleLabel.adjustsFontSizeToFitWidth = YES;
-  key.titleLabel.minimumScaleFactor = 0.7f;
+  [key setAttributedTitle:GHOST_IOSCommandKeyTitle(default_title, name)
+                 forState:UIControlStateNormal];
+  key.titleLabel.numberOfLines = 2;
+  key.titleLabel.textAlignment = NSTextAlignmentCenter;
   key.backgroundColor = GHOST_IOSCommandKeyIdleColor();
   key.layer.cornerRadius = height * 0.5f;
   key.layer.cornerCurve = kCACornerCurveContinuous;
@@ -311,7 +381,91 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
     [key.heightAnchor constraintEqualToConstant:height],
   ]];
   [key addTarget:key action:@selector(handlePress) forControlEvents:UIControlEventTouchUpInside];
+  [key addInteraction:[[[UIContextMenuInteraction alloc] initWithDelegate:key] autorelease]];
   return key;
+}
+
+- (void)dealloc
+{
+  [key_id_ release];
+  [default_title_ release];
+  [default_name_ release];
+  [super dealloc];
+}
+
+/** Show \a name on the button, or its default when \a name is empty. */
+- (void)applyName:(NSString *)name
+{
+  NSString *trimmed = [name stringByTrimmingCharactersInSet:NSCharacterSet
+                                                                 .whitespaceAndNewlineCharacterSet];
+  if (trimmed.length > GHOST_IOSCommandKeyNameMax) {
+    trimmed = [trimmed substringToIndex:GHOST_IOSCommandKeyNameMax];
+  }
+  GHOST_IOSCommandKeySetCustomName(key_id_, trimmed);
+  NSString *shown = trimmed.length > 0 ? trimmed : default_name_;
+  [self setAttributedTitle:GHOST_IOSCommandKeyTitle(default_title_, shown)
+                  forState:UIControlStateNormal];
+  self.accessibilityLabel = shown.length > 0 ? shown : default_title_;
+}
+
+- (void)promptRename
+{
+  UIViewController *presenter = self.window.rootViewController;
+  while (presenter.presentedViewController != nil) {
+    presenter = presenter.presentedViewController;
+  }
+  if (presenter == nil) {
+    return;
+  }
+  UIAlertController *alert = [UIAlertController
+      alertControllerWithTitle:@"Rename Button"
+                       message:@"Choose the name shown under the key. The key it sends does not change."
+                preferredStyle:UIAlertControllerStyleAlert];
+  [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+    field.text = GHOST_IOSCommandKeyCustomName(key_id_) ?: default_name_;
+    field.placeholder = default_name_ ?: default_title_;
+    field.clearButtonMode = UITextFieldViewModeWhileEditing;
+    field.autocorrectionType = UITextAutocorrectionTypeNo;
+    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+  }];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Save"
+                                            style:UIAlertActionStyleDefault
+                                          handler:^(UIAlertAction *) {
+                                            [self applyName:alert.textFields.firstObject.text];
+                                          }]];
+  [presenter presentViewController:alert animated:YES completion:nil];
+}
+
+- (UIContextMenuConfiguration *)contextMenuInteraction:(UIContextMenuInteraction *)interaction
+                        configurationForMenuAtLocation:(CGPoint)location
+{
+  GHOSTIOSCommandKeyButton *key = self;
+  return [UIContextMenuConfiguration
+      configurationWithIdentifier:nil
+                  previewProvider:nil
+                   actionProvider:^UIMenu *(NSArray<UIMenuElement *> *) {
+                     NSMutableArray<UIMenuElement *> *items = [NSMutableArray array];
+                     [items addObject:[UIAction actionWithTitle:@"Rename Button…"
+                                                          image:GHOST_IOSStyle_symbol(@"pencil", 15.0f)
+                                                     identifier:nil
+                                                        handler:^(UIAction *) {
+                                                          [key promptRename];
+                                                        }]];
+                     if (GHOST_IOSCommandKeyCustomName(key->key_id_) != nil) {
+                       [items addObject:[UIAction
+                                            actionWithTitle:@"Reset Name"
+                                                      image:GHOST_IOSStyle_symbol(
+                                                                @"arrow.counterclockwise", 15.0f)
+                                                 identifier:nil
+                                                    handler:^(UIAction *) {
+                                                      [key applyName:nil];
+                                                    }]];
+                     }
+                     return [UIMenu menuWithTitle:@"" children:items];
+                   }];
 }
 
 - (void)setHighlighted:(BOOL)highlighted
@@ -348,6 +502,8 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   UIImageView *handle_icon_;
   NSArray<GHOSTIOSModifierKeyView *> *keys_;
   NSMutableArray<GHOSTIOSCommandKeyButton *> *context_keys_;
+  /** Escape, always with the modifier keys, whatever editor is under the pointer. */
+  GHOSTIOSCommandKeyButton *esc_key_;
   GHOST_IOSBarKey context_key_info_[GHOST_IOS_BAR_KEY_MAX];
   int context_key_count_;
   UIView *separator_;
@@ -443,6 +599,14 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   }
   keys_ = [keys copy];
 
+  static const GHOST_IOSBarKey esc_info = {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc), "Cancel"};
+  esc_key_ = [[GHOSTIOSCommandKeyButton keyWithInfo:esc_info
+                                           delegate:delegate
+                                              width:key_width
+                                             height:command_key_height
+                                         identifier:@"blender_command_key_esc"] retain];
+  esc_key_.hidden = !expanded_;
+
   separator_ = [[UIView alloc] init];
   separator_.translatesAutoresizingMaskIntoConstraints = NO;
   separator_.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.25f];
@@ -531,6 +695,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   if (id<GHOSTIOSCanvasInsetting> host = [self insettingHost]) {
     [host setCanvasInsetsLeading:0.0f trailing:0.0f];
   }
+  [esc_key_ forgetDelegate];
   for (GHOSTIOSCommandKeyButton *key in context_keys_) {
     [key forgetDelegate];
   }
@@ -550,6 +715,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
   [handle_icon_ release];
   [keys_ release];
   [context_keys_ release];
+  [esc_key_ release];
   [separator_ release];
   [settings_button_ release];
   [key_pad_ release];
@@ -601,6 +767,7 @@ static UIColor *GHOST_IOSCommandKeyIdleColor()
 - (NSArray<UIView *> *)expandableViews
 {
   NSMutableArray<UIView *> *views = [NSMutableArray arrayWithArray:keys_];
+  [views addObject:esc_key_];
   [views addObject:separator_];
   [views addObjectsFromArray:context_keys_];
   [views addObject:settings_button_];

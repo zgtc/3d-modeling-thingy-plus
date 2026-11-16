@@ -402,6 +402,8 @@ typedef struct UserInputEvent {
   /* Apple Pencil palette and the touch settings behind it. */
   NSObject *pencil_palette;
   const GHOST_IOSPaletteSlot *pencil_palette_slots;
+  /** The slots of the open palette, resolved from the user's layout. */
+  GHOST_IOSPaletteSlot pencil_palette_buffer[GHOST_IOS_PALETTE_SLOT_COUNT];
   GHOST_IOSTouchSettings touch_settings;
   /** Where the Pencil was last seen, in view points, for palettes opened without a hover pose. */
   CGPoint last_pencil_view_point;
@@ -1092,7 +1094,9 @@ static GHOST_TModifierKey IOS_belt_modifier_key(const GHOST_IOSModifier modifier
 /** \a point is in view points. */
 - (void)showPencilPaletteAt:(CGPoint)point
 {
-  pencil_palette_slots = GHOST_IOSPalette_slots(interaction_context);
+  GHOST_IOSPalette_resolve(
+      interaction_context.mode, touch_settings.palette_layout, pencil_palette_buffer);
+  pencil_palette_slots = pencil_palette_buffer;
   GHOST_IOSPencilPalette_show(
       pencil_palette, point, pencil_palette_slots, GHOST_IOS_PALETTE_SLOT_COUNT);
 }

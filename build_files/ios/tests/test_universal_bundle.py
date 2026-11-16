@@ -29,7 +29,7 @@ class UniversalBundlePlistTests(unittest.TestCase):
     def test_bundle_id_is_the_single_ios_product(self) -> None:
         self.assertEqual(
             self.plist["CFBundleIdentifier"],
-            "org.blenderfoundation.blender.ios",
+            "com.eightvine.blender",
         )
 
     def test_declares_iphone_and_ipad_device_families(self) -> None:

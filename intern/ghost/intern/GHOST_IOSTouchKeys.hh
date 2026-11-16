@@ -142,6 +142,192 @@ inline constexpr GHOST_IOSPaletteSlot GHOST_IOS_PALETTE_PAINT[GHOST_IOS_PALETTE_
      GHOST_IOS_KEY_MOD(GHOST_kKeyZ, GHOST_IOS_STROKE_CTRL | GHOST_IOS_STROKE_SHIFT)},
 };
 
+static_assert(GHOST_IOS_PALETTE_SLOT_COUNT == GHOST_IOS_PALETTE_LAYOUT_SLOTS,
+              "the stored palette layout needs one entry per slot");
+
+/* -------------------------------------------------------------------- */
+/** \name Editable palette
+ *
+ * Every action a palette slot can be set to. The user's layout stores indices into this table,
+ * so only ever append to it.
+ * \{ */
+
+enum : uint8_t {
+  GHOST_IOS_PALETTE_FOR_OBJECT = 1 << 0,
+  GHOST_IOS_PALETTE_FOR_EDIT = 1 << 1,
+  GHOST_IOS_PALETTE_FOR_SCULPT = 1 << 2,
+  GHOST_IOS_PALETTE_FOR_PAINT = 1 << 3,
+  GHOST_IOS_PALETTE_FOR_ALL = 0xF,
+};
+
+struct GHOST_IOSPaletteAction {
+  GHOST_IOSPaletteSlot slot;
+  /** Modes the action suits, as #GHOST_IOS_PALETTE_FOR_OBJECT and friends. */
+  uint8_t modes;
+};
+
+inline constexpr GHOST_IOSPaletteAction GHOST_IOS_PALETTE_CATALOG[] = {
+    /* General. */
+    {{"Undo",
+      "arrow.uturn.backward",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyZ, GHOST_IOS_STROKE_CTRL)},
+     GHOST_IOS_PALETTE_FOR_ALL},
+    {{"Redo",
+      "arrow.uturn.forward",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyZ, GHOST_IOS_STROKE_CTRL | GHOST_IOS_STROKE_SHIFT)},
+     GHOST_IOS_PALETTE_FOR_ALL},
+    {{"Frame Selected",
+      "viewfinder",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY(GHOST_kKeyNumpadPeriod)},
+     GHOST_IOS_PALETTE_FOR_ALL},
+    {{"X-Ray",
+      "square.on.square.dashed",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyZ, GHOST_IOS_STROKE_ALT)},
+     GHOST_IOS_PALETTE_FOR_OBJECT | GHOST_IOS_PALETTE_FOR_EDIT},
+    /* Object and edit. */
+    {{"Move",
+      "arrow.up.and.down.and.arrow.left.and.right",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY(GHOST_kKeyG)},
+     GHOST_IOS_PALETTE_FOR_OBJECT | GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Rotate",
+      "arrow.trianglehead.2.clockwise.rotate.90",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY(GHOST_kKeyR)},
+     GHOST_IOS_PALETTE_FOR_OBJECT | GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Scale",
+      "arrow.up.left.and.arrow.down.right",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY(GHOST_kKeyS)},
+     GHOST_IOS_PALETTE_FOR_OBJECT | GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Delete", "trash", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyX)},
+     GHOST_IOS_PALETTE_FOR_OBJECT | GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Box Select", "rectangle.dashed", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyB)},
+     GHOST_IOS_PALETTE_FOR_OBJECT | GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Select All", "checkmark.rectangle", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyA)},
+     GHOST_IOS_PALETTE_FOR_OBJECT | GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Hide", "eye.slash", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyH)},
+     GHOST_IOS_PALETTE_FOR_OBJECT | GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Reveal",
+      "eye",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyH, GHOST_IOS_STROKE_ALT)},
+     GHOST_IOS_PALETTE_FOR_OBJECT | GHOST_IOS_PALETTE_FOR_EDIT},
+    /* Object. */
+    {{"Add",
+      "plus",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyA, GHOST_IOS_STROKE_SHIFT)},
+     GHOST_IOS_PALETTE_FOR_OBJECT},
+    {{"Duplicate",
+      "plus.square.on.square",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyD, GHOST_IOS_STROKE_SHIFT)},
+     GHOST_IOS_PALETTE_FOR_OBJECT},
+    {{"Apply",
+      "checkmark.circle",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyA, GHOST_IOS_STROKE_CTRL)},
+     GHOST_IOS_PALETTE_FOR_OBJECT},
+    {{"Parent",
+      "link",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyP, GHOST_IOS_STROKE_CTRL)},
+     GHOST_IOS_PALETTE_FOR_OBJECT},
+    {{"Join",
+      "rectangle.on.rectangle",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyJ, GHOST_IOS_STROKE_CTRL)},
+     GHOST_IOS_PALETTE_FOR_OBJECT},
+    /* Edit. */
+    {{"Vertex", "circle.grid.2x2", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKey1)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Edge", "line.diagonal", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKey2)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Face", "square", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKey3)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Extrude", "square.and.arrow.up", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyE)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Inset", "square.inset.filled", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyI)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Bevel",
+      "square.on.circle",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyB, GHOST_IOS_STROKE_CTRL)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Loop Cut",
+      "rectangle.split.2x1",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyR, GHOST_IOS_STROKE_CTRL)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Knife", "scissors", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyK)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Merge", "arrow.triangle.merge", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyM)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    {{"Fill", "paintbucket.classic", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyF)},
+     GHOST_IOS_PALETTE_FOR_EDIT},
+    /* Sculpt and paint. */
+    {{"Radius", "circle.dashed", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyF)},
+     GHOST_IOS_PALETTE_FOR_SCULPT | GHOST_IOS_PALETTE_FOR_PAINT},
+    {{"Strength",
+      "dial.medium",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY_MOD(GHOST_kKeyF, GHOST_IOS_STROKE_SHIFT)},
+     GHOST_IOS_PALETTE_FOR_SCULPT | GHOST_IOS_PALETTE_FOR_PAINT},
+    {{"Invert",
+      "plusminus",
+      GHOST_IOSSlotKind::InvertBrush,
+      GHOST_IOS_KEY(GHOST_kKeyUnknown)},
+     GHOST_IOS_PALETTE_FOR_SCULPT | GHOST_IOS_PALETTE_FOR_PAINT},
+    /* Sculpt. */
+    {{"Draw", "paintbrush.pointed", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyV)},
+     GHOST_IOS_PALETTE_FOR_SCULPT},
+    {{"Smooth", "drop", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyS)},
+     GHOST_IOS_PALETTE_FOR_SCULPT},
+    {{"Mask", "theatermasks", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyA)},
+     GHOST_IOS_PALETTE_FOR_SCULPT},
+    /* Paint. */
+    {{"Swap Colors",
+      "arrow.left.arrow.right",
+      GHOST_IOSSlotKind::Key,
+      GHOST_IOS_KEY(GHOST_kKeyX)},
+     GHOST_IOS_PALETTE_FOR_PAINT},
+    {{"Stroke", "scribble", GHOST_IOSSlotKind::Key, GHOST_IOS_KEY(GHOST_kKeyE)},
+     GHOST_IOS_PALETTE_FOR_PAINT},
+};
+
+inline constexpr int GHOST_IOS_PALETTE_CATALOG_COUNT = int(
+    sizeof(GHOST_IOS_PALETTE_CATALOG) / sizeof(GHOST_IOS_PALETTE_CATALOG[0]));
+
+/** Index into a layout for \a mode. #GHOST_IOSMode::Other uses the Object palette. */
+inline int GHOST_IOSPalette_modeIndex(const GHOST_IOSMode mode)
+{
+  switch (mode) {
+    case GHOST_IOSMode::Edit:
+      return 1;
+    case GHOST_IOSMode::Sculpt:
+      return 2;
+    case GHOST_IOSMode::Paint:
+      return 3;
+    case GHOST_IOSMode::Object:
+    case GHOST_IOSMode::Other:
+      break;
+  }
+  return 0;
+}
+
+/** The mode bit of #GHOST_IOSPaletteAction::modes for a layout index. */
+inline uint8_t GHOST_IOSPalette_modeBit(const int mode_index)
+{
+  return uint8_t(1u << mode_index);
+}
+
+/** \} */
+
 /** The palette for what is under the Pencil tip. Always #GHOST_IOS_PALETTE_SLOT_COUNT slots. */
 inline const GHOST_IOSPaletteSlot *GHOST_IOSPalette_slots(
     const GHOST_IOSInteractionContext &context)
@@ -158,6 +344,27 @@ inline const GHOST_IOSPaletteSlot *GHOST_IOSPalette_slots(
       break;
   }
   return GHOST_IOS_PALETTE_OBJECT;
+}
+
+/**
+ * The slots to show for \a mode: the user's choices from \a layout, and the built-in slot where
+ * a choice is unset or out of range.
+ */
+inline void GHOST_IOSPalette_resolve(
+    const GHOST_IOSMode mode,
+    const int8_t layout[GHOST_IOS_PALETTE_MODE_COUNT][GHOST_IOS_PALETTE_LAYOUT_SLOTS],
+    GHOST_IOSPaletteSlot r_slots[GHOST_IOS_PALETTE_SLOT_COUNT])
+{
+  GHOST_IOSInteractionContext context;
+  context.mode = mode;
+  const GHOST_IOSPaletteSlot *defaults = GHOST_IOSPalette_slots(context);
+  const int mode_index = GHOST_IOSPalette_modeIndex(mode);
+  for (int i = 0; i < GHOST_IOS_PALETTE_SLOT_COUNT; i++) {
+    const int choice = layout[mode_index][i];
+    r_slots[i] = (choice >= 0 && choice < GHOST_IOS_PALETTE_CATALOG_COUNT) ?
+                     GHOST_IOS_PALETTE_CATALOG[choice].slot :
+                     defaults[i];
+  }
 }
 
 /* -------------------------------------------------------------------- */
@@ -235,53 +442,52 @@ inline GHOST_IOSPalettePoint GHOST_IOSPalette_clampCenter(const GHOST_IOSPalette
  * \{ */
 
 struct GHOST_IOSBarKey {
+  /** The key as the button shows it, like "R" or "⇧F". */
   const char *title;
   GHOST_IOSKeyStroke stroke;
+  /** What the key does here, shown under the key. Null shows the key alone. */
+  const char *name;
 };
 
 constexpr int GHOST_IOS_BAR_KEY_MAX = 6;
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_OBJECT[] = {
-    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
-    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
-    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r")},
-    {"S", GHOST_IOS_KEY_TEXT(GHOST_kKeyS, "s")},
-    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
-    {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab), "Edit Mode"},
+    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g"), "Move"},
+    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r"), "Rotate"},
+    {"S", GHOST_IOS_KEY_TEXT(GHOST_kKeyS, "s"), "Scale"},
+    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x"), "Delete"},
 };
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_EDIT[] = {
-    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
-    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
-    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r")},
-    {"S", GHOST_IOS_KEY_TEXT(GHOST_kKeyS, "s")},
-    {"E", GHOST_IOS_KEY_TEXT(GHOST_kKeyE, "e")},
-    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab), "Object Mode"},
+    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g"), "Move"},
+    {"R", GHOST_IOS_KEY_TEXT(GHOST_kKeyR, "r"), "Rotate"},
+    {"S", GHOST_IOS_KEY_TEXT(GHOST_kKeyS, "s"), "Scale"},
+    {"E", GHOST_IOS_KEY_TEXT(GHOST_kKeyE, "e"), "Extrude"},
+    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x"), "Delete"},
 };
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_SCULPT[] = {
-    {"F", GHOST_IOS_KEY_TEXT(GHOST_kKeyF, "f")},
-    {"⇧F", GHOST_IOS_KEY_MOD(GHOST_kKeyF, GHOST_IOS_STROKE_SHIFT)},
-    {"H", GHOST_IOS_KEY_TEXT(GHOST_kKeyH, "h")},
-    {"⌥H", GHOST_IOS_KEY_MOD(GHOST_kKeyH, GHOST_IOS_STROKE_ALT)},
-    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
-    {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
+    {"F", GHOST_IOS_KEY_TEXT(GHOST_kKeyF, "f"), "Radius"},
+    {"⇧F", GHOST_IOS_KEY_MOD(GHOST_kKeyF, GHOST_IOS_STROKE_SHIFT), "Strength"},
+    {"H", GHOST_IOS_KEY_TEXT(GHOST_kKeyH, "h"), "Hide"},
+    {"⌥H", GHOST_IOS_KEY_MOD(GHOST_kKeyH, GHOST_IOS_STROKE_ALT), "Reveal"},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab), "Object Mode"},
 };
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_NODE[] = {
-    {"Add", GHOST_IOS_KEY_MOD(GHOST_kKeyA, GHOST_IOS_STROKE_SHIFT)},
-    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g")},
-    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
-    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
-    {"H", GHOST_IOS_KEY_TEXT(GHOST_kKeyH, "h")},
-    {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
+    {"⇧A", GHOST_IOS_KEY_MOD(GHOST_kKeyA, GHOST_IOS_STROKE_SHIFT), "Add"},
+    {"G", GHOST_IOS_KEY_TEXT(GHOST_kKeyG, "g"), "Move"},
+    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x"), "Delete"},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab), "Edit Group"},
+    {"H", GHOST_IOS_KEY_TEXT(GHOST_kKeyH, "h"), "Collapse"},
 };
 
 inline constexpr GHOST_IOSBarKey GHOST_IOS_BAR_OTHER[] = {
-    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab)},
-    {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
-    {"Delete", GHOST_IOS_KEY(GHOST_kKeyDelete)},
-    {"Return", GHOST_IOS_KEY(GHOST_kKeyEnter)},
+    {"Tab", GHOST_IOS_KEY(GHOST_kKeyTab), nullptr},
+    {"Delete", GHOST_IOS_KEY(GHOST_kKeyDelete), nullptr},
+    {"Return", GHOST_IOS_KEY(GHOST_kKeyEnter), "Confirm"},
 };
 
 #define GHOST_IOS_ARRAY_LEN(array) int(sizeof(array) / sizeof(*(array)))
@@ -316,24 +522,24 @@ inline const GHOST_IOSBarKey *GHOST_IOSCommandBar_keys(const GHOST_IOSInteractio
 
 /** Transform key pad, row by row, four keys per row. */
 inline constexpr GHOST_IOSBarKey GHOST_IOS_KEY_PAD[] = {
-    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x")},
-    {"Y", GHOST_IOS_KEY_TEXT(GHOST_kKeyY, "y")},
-    {"Z", GHOST_IOS_KEY_TEXT(GHOST_kKeyZ, "z")},
-    {"⌫", GHOST_IOS_KEY(GHOST_kKeyBackSpace)},
-    {"7", GHOST_IOS_KEY_TEXT(GHOST_kKey7, "7")},
-    {"8", GHOST_IOS_KEY_TEXT(GHOST_kKey8, "8")},
-    {"9", GHOST_IOS_KEY_TEXT(GHOST_kKey9, "9")},
-    {"−", GHOST_IOS_KEY_TEXT(GHOST_kKeyMinus, "-")},
-    {"4", GHOST_IOS_KEY_TEXT(GHOST_kKey4, "4")},
-    {"5", GHOST_IOS_KEY_TEXT(GHOST_kKey5, "5")},
-    {"6", GHOST_IOS_KEY_TEXT(GHOST_kKey6, "6")},
-    {".", GHOST_IOS_KEY_TEXT(GHOST_kKeyPeriod, ".")},
-    {"1", GHOST_IOS_KEY_TEXT(GHOST_kKey1, "1")},
-    {"2", GHOST_IOS_KEY_TEXT(GHOST_kKey2, "2")},
-    {"3", GHOST_IOS_KEY_TEXT(GHOST_kKey3, "3")},
-    {"0", GHOST_IOS_KEY_TEXT(GHOST_kKey0, "0")},
-    {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc)},
-    {"Return", GHOST_IOS_KEY(GHOST_kKeyEnter)},
+    {"X", GHOST_IOS_KEY_TEXT(GHOST_kKeyX, "x"), nullptr},
+    {"Y", GHOST_IOS_KEY_TEXT(GHOST_kKeyY, "y"), nullptr},
+    {"Z", GHOST_IOS_KEY_TEXT(GHOST_kKeyZ, "z"), nullptr},
+    {"⌫", GHOST_IOS_KEY(GHOST_kKeyBackSpace), nullptr},
+    {"7", GHOST_IOS_KEY_TEXT(GHOST_kKey7, "7"), nullptr},
+    {"8", GHOST_IOS_KEY_TEXT(GHOST_kKey8, "8"), nullptr},
+    {"9", GHOST_IOS_KEY_TEXT(GHOST_kKey9, "9"), nullptr},
+    {"−", GHOST_IOS_KEY_TEXT(GHOST_kKeyMinus, "-"), nullptr},
+    {"4", GHOST_IOS_KEY_TEXT(GHOST_kKey4, "4"), nullptr},
+    {"5", GHOST_IOS_KEY_TEXT(GHOST_kKey5, "5"), nullptr},
+    {"6", GHOST_IOS_KEY_TEXT(GHOST_kKey6, "6"), nullptr},
+    {".", GHOST_IOS_KEY_TEXT(GHOST_kKeyPeriod, "."), nullptr},
+    {"1", GHOST_IOS_KEY_TEXT(GHOST_kKey1, "1"), nullptr},
+    {"2", GHOST_IOS_KEY_TEXT(GHOST_kKey2, "2"), nullptr},
+    {"3", GHOST_IOS_KEY_TEXT(GHOST_kKey3, "3"), nullptr},
+    {"0", GHOST_IOS_KEY_TEXT(GHOST_kKey0, "0"), nullptr},
+    {"Esc", GHOST_IOS_KEY(GHOST_kKeyEsc), nullptr},
+    {"Return", GHOST_IOS_KEY(GHOST_kKeyEnter), nullptr},
 };
 constexpr int GHOST_IOS_KEY_PAD_COLUMNS = 4;
 constexpr int GHOST_IOS_KEY_PAD_COUNT = GHOST_IOS_ARRAY_LEN(GHOST_IOS_KEY_PAD);

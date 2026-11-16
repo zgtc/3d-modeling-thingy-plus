@@ -99,6 +99,11 @@ class CommandBarKeyTests(unittest.TestCase):
             CHECK(std::strcmp(object[0].title, "Tab") == 0);
             CHECK(has_title(object, count, "G") && has_title(object, count, "R") &&
                   has_title(object, count, "S") && has_title(object, count, "X"));
+            /* Each key shows what it does, and Escape is always on the bar instead. */
+            CHECK(std::strcmp(object[1].name, "Move") == 0);
+            CHECK(std::strcmp(object[2].name, "Rotate") == 0);
+            CHECK(std::strcmp(object[3].name, "Scale") == 0);
+            CHECK(!has_title(object, count, "Esc"));
 
             const GHOST_IOSBarKey *edit = GHOST_IOSCommandBar_keys(
                 context(V, GHOST_IOSMode::Edit), &count);
@@ -111,12 +116,13 @@ class CommandBarKeyTests(unittest.TestCase):
 
             const GHOST_IOSBarKey *node = GHOST_IOSCommandBar_keys(
                 context(GHOST_IOSEditor::Node, GHOST_IOSMode::Other), &count);
-            CHECK(count <= GHOST_IOS_BAR_KEY_MAX && has_title(node, count, "Add"));
+            CHECK(count <= GHOST_IOS_BAR_KEY_MAX && has_title(node, count, "⇧A"));
 
             const GHOST_IOSBarKey *other = GHOST_IOSCommandBar_keys(
                 context(GHOST_IOSEditor::Other, GHOST_IOSMode::Object), &count);
             CHECK(count <= GHOST_IOS_BAR_KEY_MAX);
-            CHECK(has_title(other, count, "Esc") && has_title(other, count, "Delete"));
+            CHECK(has_title(other, count, "Return") && has_title(other, count, "Delete"));
+            CHECK(!has_title(other, count, "Esc"));
             CHECK(object != edit && edit != sculpt && sculpt != node && node != other);
             """,
         )
@@ -190,13 +196,13 @@ class CommandBarLatchTests(unittest.TestCase):
             """
             CHECK(GHOST_IOS_MODIFIER_COUNT == 4);
             GHOST_IOSModifierLatch latch;
-            latch.keyDown(Mod::OS, 1.00);
-            latch.keyUp(Mod::OS, 1.05);
-            CHECK(latch.mode(Mod::OS) == Mode::Latched);
+            latch.keyDown(Mod::Command, 1.00);
+            latch.keyUp(Mod::Command, 1.05);
+            CHECK(latch.mode(Mod::Command) == Mode::Latched);
             latch.pointerPressed();
-            CHECK(latch.wantsDown(Mod::OS));
+            CHECK(latch.wantsDown(Mod::Command));
             latch.pointerReleased();
-            CHECK(latch.mode(Mod::OS) == Mode::Off);
+            CHECK(latch.mode(Mod::Command) == Mode::Off);
             """,
         )
 
@@ -238,8 +244,8 @@ class CommandBarSourceTests(unittest.TestCase):
 
     def test_bar_docks_vertically_with_cmd_shortcuts_and_settings(self) -> None:
         self.assertIn("stack_.axis = UILayoutConstraintAxisVertical;", self.belt)
-        self.assertIn('@"blender_modifier_os"', self.belt)
-        self.assertIn("GHOST_IOSModifier::OS", self.belt)
+        self.assertIn('@"blender_modifier_command"', self.belt)
+        self.assertIn("GHOST_IOSModifier::Command", self.belt)
         # Pinned open: no swipe to tuck the bar away (see PinnedCommandBarTests).
         self.assertIn("settings_button_.showsMenuAsPrimaryAction = YES;", self.belt)
         self.assertIn('@"blender_command_bar_settings"', self.belt)
@@ -270,7 +276,7 @@ class CommandBarSourceTests(unittest.TestCase):
         self.assertLess(key_up, released)
         mapping = self.window[self.window.index("static GHOST_TModifierKey IOS_belt_modifier_key(") :]
         mapping = mapping[: mapping.index("\n}\n")]
-        self.assertIn("case GHOST_IOSModifier::OS:\n      return GHOST_kModifierKeyLeftOS;", mapping)
+        self.assertIn("case GHOST_IOSModifier::Command:\n      return GHOST_kModifierKeyLeftOS;", mapping)
 
     def test_context_changes_refresh_keys_and_key_pad(self) -> None:
         setter = self.window[self.window.index("- (void)setInteractionContext:(const GHOST_IOSInteractionContext &)context\n{") :]

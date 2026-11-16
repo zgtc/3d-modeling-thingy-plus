@@ -47,7 +47,7 @@ class ConfigurePlanTests(unittest.TestCase):
             text=True,
         )
         plan = json.loads(result.stdout)
-        bulk_prefix = "/Volumes/BlenderBuild/blender-ios/"
+        bulk_prefix = "/Volumes/Untitled/Dev/BlenderBuild/blender-ios/"
         for key in (
             "build_directory",
             "install_directory",
