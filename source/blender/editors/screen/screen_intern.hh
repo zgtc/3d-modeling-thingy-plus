@@ -75,8 +75,15 @@ enum class AreaDockTarget {
 
 /**
  * Expanded interaction influence of area borders.
+ *
+ * Touch and Pencil need a much wider grab zone than a mouse pointer. The iOS build defines
+ * #BLENDER_PLATFORM_DEFAULT_UI_SCALE, so use it to widen the zone there only.
  */
-#define BORDERPADDING (U.border_width * UI_SCALE_FAC + 3.0f * UI_SCALE_FAC)
+#ifdef BLENDER_PLATFORM_DEFAULT_UI_SCALE
+#  define BORDERPADDING (U.border_width * UI_SCALE_FAC + 18.0f * UI_SCALE_FAC)
+#else
+#  define BORDERPADDING (U.border_width * UI_SCALE_FAC + 3.0f * UI_SCALE_FAC)
+#endif
 
 /**
  * Number of pixels of the area border corner radius.
